@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+import datetime as dt
 from pydantic import BaseModel
 
 
@@ -33,6 +33,6 @@ class ExerciseResponse(BaseModel):
     cues: str | None = None
     image_url: str | None = None
     video_url: str | None = None
-    created_at: datetime
+    created_at: dt.datetime
 
     model_config = {"from_attributes": True}

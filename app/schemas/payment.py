@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import uuid
-from datetime import datetime
+import datetime as dt
 from pydantic import BaseModel
 
 
@@ -31,10 +33,10 @@ class SubscriptionResponse(BaseModel):
     currency: str
     billing_cycle: str
     status: str
-    current_period_end: datetime | None = None
+    current_period_end: dt.datetime | None = None
     payment_method_last4: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: dt.datetime
+    updated_at: dt.datetime
 
     model_config = {"from_attributes": True}
 
@@ -46,8 +48,8 @@ class InvoiceResponse(BaseModel):
     stripe_invoice_id: str | None = None
     amount_pence: int
     status: str
-    date: datetime
+    date: dt.datetime
     pdf_url: str | None = None
-    created_at: datetime
+    created_at: dt.datetime
 
     model_config = {"from_attributes": True}

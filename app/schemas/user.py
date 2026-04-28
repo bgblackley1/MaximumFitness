@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+import datetime as dt
 from pydantic import BaseModel, EmailStr
 
 
@@ -9,6 +9,6 @@ class UserResponse(BaseModel):
     name: str
     phone: str | None = None
     role: str
-    created_at: datetime
+    created_at: dt.datetime
 
     model_config = {"from_attributes": True}

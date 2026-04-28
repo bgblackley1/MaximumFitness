@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 import uuid
-from datetime import date, datetime
+import datetime as dt
 from pydantic import BaseModel
 
 
 class WorkoutLogCreate(BaseModel):
     plan_day_id: uuid.UUID | None = None
-    date: date
+    date: dt.date
 
 
 class WorkoutLogSetCreate(BaseModel):
@@ -34,9 +36,9 @@ class WorkoutLogResponse(BaseModel):
     id: uuid.UUID
     client_id: uuid.UUID
     plan_day_id: uuid.UUID | None = None
-    date: date
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
+    date: dt.date
+    started_at: dt.datetime | None = None
+    completed_at: dt.datetime | None = None
     notes: str | None = None
     sets: list[WorkoutLogSetResponse] = []
 

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+import datetime as dt
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 
@@ -48,7 +48,7 @@ class ClientResponse(BaseModel):
     notes: str | None = None
     status: str
     plan_type: str | None = None
-    created_at: datetime
-    last_check_in: date | None = None
+    created_at: dt.datetime
+    last_check_in: dt.date | None = None
 
     model_config = {"from_attributes": True}

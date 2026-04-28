@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+import datetime as dt
 from pydantic import BaseModel
 
 
@@ -28,7 +28,7 @@ class WorkoutPlanCreate(BaseModel):
     title: str
     client_id: uuid.UUID | None = None
     goal_focus: str | None = None
-    start_date: date | None = None
+    start_date: dt.date | None = None
     visibility: str | None = "draft"
     weeks: list[PlanWeekCreate] = []
 
@@ -84,11 +84,11 @@ class WorkoutPlanResponse(BaseModel):
     client_id: uuid.UUID | None = None
     title: str
     goal_focus: str | None = None
-    start_date: date | None = None
+    start_date: dt.date | None = None
     visibility: str
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: dt.datetime
+    updated_at: dt.datetime
     weeks: list[PlanWeekResponse] = []
 
     model_config = {"from_attributes": True}
@@ -99,9 +99,9 @@ class WorkoutPlanSummary(BaseModel):
     title: str
     client_id: uuid.UUID | None = None
     goal_focus: str | None = None
-    start_date: date | None = None
+    start_date: dt.date | None = None
     status: str
-    created_at: datetime
+    created_at: dt.datetime
 
     model_config = {"from_attributes": True}
 
