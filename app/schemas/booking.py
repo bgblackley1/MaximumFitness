@@ -1,3 +1,4 @@
+# app/schemas/booking.py
 from __future__ import annotations
 
 import uuid
@@ -10,6 +11,7 @@ class AvailabilitySlotCreate(BaseModel):
     start_time: dt.time
     end_time: dt.time
     is_recurring: bool = True
+    is_blocked: bool = False          # ← NEW
     specific_date: dt.date | None = None
 
 
@@ -20,6 +22,7 @@ class AvailabilitySlotResponse(BaseModel):
     start_time: dt.time
     end_time: dt.time
     is_recurring: bool
+    is_blocked: bool = False          # ← NEW (default for old records)
     specific_date: dt.date | None = None
     created_at: dt.datetime
 

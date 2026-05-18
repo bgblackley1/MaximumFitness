@@ -1,28 +1,33 @@
+# alembic/env.py
 import asyncio
 from logging.config import fileConfig
 from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 
 from app.config import settings
 from app.database import Base
-from app.models import *  # noqa: F401, F403 — ensures all models are registered
+from app.models import *  # noqa: F401, F403
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url with our actual DATABASE_URL
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# ─── DO NOT call config.set_main_option here ───────────────────────────────
+# config.set_main_option passes the URL through Python's configparser which
+# treats % as interpolation syntax — this crashes when the URL contains
+# percent-encoded characters like %2F or %2A.
+# Instead we pass settings.DATABASE_URL directly to every function below.
+# ────────────────────────────────────────────────────────────────────────────
 
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    """Run migrations without a live DB connection."""
     context.configure(
-        url=url,
+        url=settings.DATABASE_URL,   # ← direct, bypasses configparser
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -38,9 +43,9 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    """Run migrations with a live async DB connection."""
+    connectable = create_async_engine(
+        settings.DATABASE_URL,       # ← direct, bypasses configparser
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
