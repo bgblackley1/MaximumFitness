@@ -12,10 +12,10 @@ export default function ClientHomeScreen() {
   const router = useRouter();
 
   const tiles = [
-    { icon: 'trending-up-outline' as const, label: 'Progress', route: '/(client)/progress' },
-    { icon: 'barbell-outline' as const, label: 'Workouts', route: '/(client)/my-workouts' },
-    { icon: 'calendar-outline' as const, label: 'Book Session', route: '/(client)/book' },
-    { icon: 'person-outline' as const, label: 'Account', route: '/(client)/account' },
+    { icon: 'trending-up-outline' as const, label: 'Progress', route: '/client/progress' },
+    { icon: 'barbell-outline' as const, label: 'Workouts', route: '/client/my-workouts' },
+    { icon: 'calendar-outline' as const, label: 'Book Session', route: '/client/book' },
+    { icon: 'person-outline' as const, label: 'Account', route: '/client/account' },
   ];
 
   return (
@@ -29,7 +29,7 @@ export default function ClientHomeScreen() {
           <Text style={styles.nextPlaceholder}>No upcoming session booked.</Text>
           <TouchableOpacity
             style={styles.bookBtn}
-            onPress={() => router.push('/(client)/book')}
+            onPress={() => router.push('/client/book')}
           >
             <Text style={styles.bookBtnText}>Book a session</Text>
           </TouchableOpacity>

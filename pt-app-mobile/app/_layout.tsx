@@ -15,7 +15,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (!isInitialized) return;
 
-    const inAuthGroup = segments[0] === '(pt)' || segments[0] === '(client)';
+    const inAuthGroup = segments[0] === 'pt' || segments[0] === 'client';
 
     if (!user) {
       // Not logged in, go to login
@@ -23,9 +23,9 @@ export default function RootLayout() {
     } else if (user && !inAuthGroup) {
       // Logged in but not in the right group, redirect based on role
       if (role === 'pt') {
-        router.replace('/(pt)/dashboard');
+        router.replace('/pt/dashboard');
       } else if (role === 'client') {
-        router.replace('/(client)/home');
+        router.replace('/client/home');
       }
     }
   }, [user, role, isInitialized]);
@@ -37,8 +37,8 @@ export default function RootLayout() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="login" />
-      <Stack.Screen name="(pt)" />
-      <Stack.Screen name="(client)" />
+      <Stack.Screen name="pt" />
+      <Stack.Screen name="client" />
     </Stack>
   );
 }

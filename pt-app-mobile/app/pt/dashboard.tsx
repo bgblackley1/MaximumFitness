@@ -102,21 +102,21 @@ export default function DashboardScreen() {
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => router.push('/(pt)/clients')}
+            onPress={() => router.push('/pt/clients')}
           >
             <Ionicons name="person-add-outline" size={20} color={colors.black} />
             <Text style={styles.actionText}>New Client</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => router.push('/(pt)/calendar')}
+            onPress={() => router.push('/pt/calendar')}
           >
             <Ionicons name="time-outline" size={20} color={colors.black} />
             <Text style={styles.actionText}>New Slot</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => router.push('/(pt)/workouts')}
+            onPress={() => router.push('/pt/workouts')}
           >
             <Ionicons name="add-circle-outline" size={20} color={colors.black} />
             <Text style={styles.actionText}>New Plan</Text>
