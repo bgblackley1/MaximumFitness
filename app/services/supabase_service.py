@@ -19,6 +19,7 @@ class SupabaseAdmin:
             body = {
                 "email": email,
                 "email_confirm": True,
+                "user_metadata": {"role": "client"},
             }
             if password:
                 body["password"] = password

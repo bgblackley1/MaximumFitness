@@ -54,7 +54,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .eq('id', userId)
       .single();
 
-    if (data && !error) {
+    if (error) {
+      // ← ADD THIS so you can see errors in the console
+      console.error('fetchProfile error:', JSON.stringify(error, null, 2));
+      return;
+    }
+
+    if (data) {
       set({ profile: data, role: data.role as 'pt' | 'client' });
     }
   },

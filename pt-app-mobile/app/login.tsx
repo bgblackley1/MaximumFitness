@@ -74,7 +74,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.white,      // ← was colors.background
   },
   scrollContent: {
     flexGrow: 1,
@@ -86,21 +86,21 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   title: {
-    fontSize: fontSize['3xl'],
+    fontSize: fontSize.xxxl,            // ← was fontSize['3xl']
     fontWeight: '700',
-    color: colors.primary,
+    color: colors.black,                // ← was colors.primary
     marginBottom: spacing.xs,
   },
   subtitle: {
-    fontSize: fontSize.base,
-    color: colors.textSecondary,
+    fontSize: fontSize.md,              // ← was fontSize.base
+    color: colors.gray500,              // ← was colors.textSecondary
   },
   form: {
     width: '100%',
   },
   error: {
-    backgroundColor: colors.error + '15',
-    color: colors.error,
+    backgroundColor: colors.red50,      // ← was colors.error + '15'
+    color: colors.red700,               // ← was colors.error
     padding: spacing.md,
     borderRadius: 8,
     marginBottom: spacing.md,
