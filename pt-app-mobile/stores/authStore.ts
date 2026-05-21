@@ -1,18 +1,22 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase';
 import { Session } from '@supabase/supabase-js';
+import API from '../services/api';
 
 interface AuthState {
   session: Session | null;
   user: any | null;
   profile: any | null;
   role: 'pt' | 'client' | null;
+  token: string | null;               // ← FIX: was missing, broke all API calls
+  clientProfileId: string | null;    // ← NEW: ClientProfile.id for client users
   isLoading: boolean;
   isInitialized: boolean;
   login: (email: string, password: string) => Promise<{ error?: string }>;
   logout: () => Promise<void>;
   initialize: () => Promise<void>;
   fetchProfile: (userId: string) => Promise<void>;
+  fetchClientProfileId: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -20,6 +24,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   profile: null,
   role: null,
+  token: null,
+  clientProfileId: null,
   isLoading: false,
   isInitialized: false,
 
@@ -27,8 +33,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
+        set({ session, user: session.user, token: session.access_token });
         await get().fetchProfile(session.user.id);
-        set({ session, user: session.user });
       }
     } catch (error) {
       console.error('Init error:', error);
@@ -36,13 +42,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ isInitialized: true });
     }
 
-    // Listen for auth changes
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
+        set({ session, user: session.user, token: session.access_token });
         await get().fetchProfile(session.user.id);
-        set({ session, user: session.user });
       } else {
-        set({ session: null, user: null, profile: null, role: null });
+        set({
+          session: null, user: null, profile: null,
+          role: null, token: null, clientProfileId: null,
+        });
       }
     });
   },
@@ -55,34 +63,44 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .single();
 
     if (error) {
-      // ← ADD THIS so you can see errors in the console
       console.error('fetchProfile error:', JSON.stringify(error, null, 2));
       return;
     }
 
     if (data) {
       set({ profile: data, role: data.role as 'pt' | 'client' });
+      if (data.role === 'client') {
+        await get().fetchClientProfileId();
+      }
+    }
+  },
+
+  fetchClientProfileId: async () => {
+    try {
+      const res = await API.get('/clients/me');
+      set({ clientProfileId: res.data.id });
+    } catch (err) {
+      console.error('fetchClientProfileId error:', err);
     }
   },
 
   login: async (email: string, password: string) => {
     set({ isLoading: true });
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
         set({ isLoading: false });
         return { error: error.message };
       }
-
       if (data.session) {
+        set({
+          session: data.session,
+          user: data.session.user,
+          token: data.session.access_token,
+        });
         await get().fetchProfile(data.session.user.id);
-        set({ session: data.session, user: data.session.user, isLoading: false });
+        set({ isLoading: false });
       }
-
       return {};
     } catch (error: any) {
       set({ isLoading: false });
@@ -92,6 +110,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     await supabase.auth.signOut();
-    set({ session: null, user: null, profile: null, role: null });
+    set({
+      session: null, user: null, profile: null,
+      role: null, token: null, clientProfileId: null,
+    });
   },
 }));

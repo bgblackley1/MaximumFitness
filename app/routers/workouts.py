@@ -34,18 +34,31 @@ def load_plan_options():
 async def list_plans(
     client_id: uuid.UUID | None = Query(None),
     plan_status: str | None = Query(None, alias="status"),
-    pt: User = Depends(get_current_pt),
+    user: User = Depends(get_current_user),        # ← was get_current_pt
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(WorkoutPlan).where(WorkoutPlan.pt_id == pt.id)
-    if client_id:
-        query = query.where(WorkoutPlan.client_id == client_id)
-    if plan_status:
-        query = query.where(WorkoutPlan.status == plan_status)
-
-    query = query.options(
-        selectinload(WorkoutPlan.client).selectinload(ClientProfile.user)
-    ).order_by(WorkoutPlan.created_at.desc())
+    if user.role == "pt":
+        query = select(WorkoutPlan).where(WorkoutPlan.pt_id == user.id)
+        if client_id:
+            query = query.where(WorkoutPlan.client_id == client_id)
+        if plan_status:
+            query = query.where(WorkoutPlan.status == plan_status)
+        query = query.options(
+            selectinload(WorkoutPlan.client).selectinload(ClientProfile.user)
+        ).order_by(WorkoutPlan.created_at.desc())
+    else:
+        # Client: only their assigned, client-visible, active plans
+        cp_result = await db.execute(
+            select(ClientProfile).where(ClientProfile.user_id == user.id)
+        )
+        cp = cp_result.scalar_one_or_none()
+        if not cp:
+            raise HTTPException(status_code=404, detail="Client profile not found")
+        query = select(WorkoutPlan).where(
+            WorkoutPlan.client_id == cp.id,
+            WorkoutPlan.visibility == "client_visible",
+            WorkoutPlan.status == "active",
+        ).order_by(WorkoutPlan.created_at.desc())
 
     result = await db.execute(query)
     return list(result.scalars().all())
