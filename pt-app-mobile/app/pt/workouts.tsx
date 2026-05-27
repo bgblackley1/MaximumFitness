@@ -202,10 +202,10 @@ export default function WorkoutsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{item.title}</Text>
             {item.goal_focus && <Text style={styles.cardSub}>{item.goal_focus}</Text>}
-            {item.client?.user?.full_name && (
+            {item.client_id && (
               <Text style={styles.cardClient}>
                 <Ionicons name="person-outline" size={12} color={colors.gray400} />{' '}
-                {item.client.user.full_name}
+                {clients.find((c: any) => c.id === item.client_id)?.name ?? 'Client'}
               </Text>
             )}
             <Text style={styles.cardMeta}>
@@ -470,7 +470,7 @@ export default function WorkoutsScreen() {
                         planForm.client_id === client.id && styles.chipTextActive,
                       ]}
                     >
-                      {client.user?.full_name || client.user?.email || 'Client'}
+                      {client.name}
                     </Text>
                   </TouchableOpacity>
                 ))}

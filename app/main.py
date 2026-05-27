@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
+# app/main.py — add import:
 from app.routers import (
     auth,
     clients,
@@ -13,7 +14,10 @@ from app.routers import (
     payments,
     dashboard,
     notifications,
+    workout_logs,          # ← ADD
 )
+
+# And add router registration (after notifications):
 
 app = FastAPI(
     title="PT App API",
@@ -49,3 +53,4 @@ app.include_router(bookings.router, tags=["Bookings"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
+app.include_router(workout_logs.router, tags=["Workout Logs"])

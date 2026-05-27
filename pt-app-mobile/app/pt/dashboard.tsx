@@ -17,7 +17,7 @@ import Badge from '@/components/Badge';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
 export default function DashboardScreen() {
-  const { user } = useAuthStore();
+  const { user, profile } = useAuthStore();
   const router = useRouter();
   const [stats, setStats] = useState({ clients: 0, bookings: 0, plans: 0 });
   const [upcomingBookings, setUpcomingBookings] = useState<any[]>([]);
@@ -72,7 +72,12 @@ export default function DashboardScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>
-              Welcome back{user?.name ? `, ${user.name}` : ''}
+              Welcome back
+              {profile?.full_name
+                ? `, ${profile.full_name}`
+                : user?.email
+                ? `, ${user.email.split('@')[0]}`
+                : ''}
             </Text>
             <Text style={styles.subtitle}>Here's what's happening today.</Text>
           </View>

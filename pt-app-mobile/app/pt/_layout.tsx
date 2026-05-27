@@ -1,3 +1,4 @@
+// pt-app-mobile/app/pt/_layout.tsx
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,10 +19,7 @@ export default function PTLayout() {
           paddingBottom: 8,
           height: 60,
         },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
-        },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '500' },
       }}
     >
       <Tabs.Screen
@@ -69,6 +67,10 @@ export default function PTLayout() {
           ),
         }}
       />
+
+      {/* ── Hidden screens (navigable but not shown as tabs) ── */}
+      <Tabs.Screen name="add-client"     options={{ href: null }} />
+      <Tabs.Screen name="client-detail"  options={{ href: null }} />
     </Tabs>
   );
 }

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { useAuthStore } from '../stores/authStore';
 
 const API = axios.create({
-  baseURL: 'http://192.168.55.189:8000', // ← your correct IP
+  baseURL: 'http://127.0.0.1:8000', // ← your correct IP
   headers: {
     'Content-Type': 'application/json',
   },
@@ -27,3 +27,4 @@ API.interceptors.response.use(
 );
 
 export default API;
+//192.168.55.189:8000

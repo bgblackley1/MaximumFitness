@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/authStore';
 import Card from '@/components/Card';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
+import { supabase } from '@/services/supabase';
 
 export default function AccountScreen() {
   const { user, profile, clientProfileId, logout } = useAuthStore();
@@ -110,9 +111,25 @@ export default function AccountScreen() {
               />
               <TouchableOpacity
                 style={[styles.saveBtn, saving && { opacity: 0.6 }]}
-                onPress={() => {
-                  // Supabase profile update would go here
-                  setEditModal(false);
+                onPress={async () => {
+                  if (!editName.trim()) return;
+                  setSaving(true);
+                  try {
+                    // Update Supabase auth metadata
+                    await supabase.auth.updateUser({
+                      data: { full_name: editName.trim() },
+                    });
+                    // Update the profiles table row
+                    await supabase
+                      .from('profiles')
+                      .update({ full_name: editName.trim() })
+                      .eq('id', user?.id);
+                    setEditModal(false);
+                  } catch (err) {
+                    Alert.alert('Error', 'Failed to update profile. Please try again.');
+                  } finally {
+                    setSaving(false);
+                  }
                 }}
                 disabled={saving}
               >

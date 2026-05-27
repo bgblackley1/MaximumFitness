@@ -45,7 +45,7 @@ async def list_availability(
         select(AvailabilitySlot).where(AvailabilitySlot.pt_id == pt_id)
     )
     return list(result.scalars().all())
-
+# app/routers/bookings.py — replace both functions
 
 @router.post(
     "/availability",
@@ -63,6 +63,7 @@ async def create_availability(
         start_time=body.start_time,
         end_time=body.end_time,
         is_recurring=body.is_recurring,
+        is_blocked=body.is_blocked,          # ← WAS MISSING
         specific_date=body.specific_date,
     )
     db.add(slot)
@@ -86,10 +87,11 @@ async def update_availability(
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
 
-    slot.day_of_week = body.day_of_week
-    slot.start_time = body.start_time
-    slot.end_time = body.end_time
-    slot.is_recurring = body.is_recurring
+    slot.day_of_week   = body.day_of_week
+    slot.start_time    = body.start_time
+    slot.end_time      = body.end_time
+    slot.is_recurring  = body.is_recurring
+    slot.is_blocked    = body.is_blocked     # ← WAS MISSING
     slot.specific_date = body.specific_date
     await db.flush()
     return slot
@@ -305,3 +307,34 @@ async def today_bookings(
         .order_by(Booking.start_time)
     )
     return list(result.scalars().all())
+
+
+# Add to app/routers/bookings.py — after the update_booking function:
+
+@router.delete("/bookings/{booking_id}", status_code=status.HTTP_200_OK)
+async def cancel_booking(
+    booking_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Booking).where(Booking.id == booking_id)
+    )
+    booking = result.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    # Verify ownership
+    if user.role == "pt" and booking.pt_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your booking")
+    if user.role == "client":
+        cp_result = await db.execute(
+            select(ClientProfile).where(ClientProfile.user_id == user.id)
+        )
+        cp = cp_result.scalar_one_or_none()
+        if not cp or booking.client_id != cp.id:
+            raise HTTPException(status_code=403, detail="Not your booking")
+
+    booking.status = "cancelled"
+    await db.flush()
+    return {"message": "Booking cancelled"}

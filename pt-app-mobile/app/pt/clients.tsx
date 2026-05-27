@@ -52,7 +52,7 @@ export default function ClientsScreen() {
   const renderClient = ({ item }: { item: any }) => (
     <TouchableOpacity
       style={styles.clientCard}
-      onPress={() => router.push(`/(pt)/client-detail?id=${item.id}`)}
+      onPress={() => router.push(`/pt/client-detail?id=${item.id}`)}
       activeOpacity={0.7}
     >
       <View style={styles.avatar}>
@@ -83,7 +83,7 @@ export default function ClientsScreen() {
         </View>
         <TouchableOpacity
           style={styles.addBtn}
-          onPress={() => router.push('/(pt)/add-client')}
+          onPress={() => router.push('/pt/add-client')}
         >
           <Ionicons name="add" size={22} color={colors.white} />
         </TouchableOpacity>
