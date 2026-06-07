@@ -22,14 +22,11 @@ router = APIRouter()
 
 
 # ── Availability ──
-
 @router.get("/availability", response_model=list[AvailabilitySlotResponse])
 async def list_availability(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Any authenticated user can see PT availability
-    # For now get the PT's availability. If user is client, find their PT.
     if user.role == "pt":
         pt_id = user.id
     else:
@@ -42,7 +39,14 @@ async def list_availability(
         pt_id = client.pt_id
 
     result = await db.execute(
-        select(AvailabilitySlot).where(AvailabilitySlot.pt_id == pt_id)
+        select(AvailabilitySlot)
+        .where(AvailabilitySlot.pt_id == pt_id)
+        .order_by(
+            AvailabilitySlot.is_recurring.desc(),   # recurring first
+            AvailabilitySlot.day_of_week.asc().nullslast(),  # Mon→Sun
+            AvailabilitySlot.specific_date.asc().nullslast(),
+            AvailabilitySlot.start_time.asc(),      # earliest time first
+        )
     )
     return list(result.scalars().all())
 # app/routers/bookings.py — replace both functions
@@ -123,7 +127,7 @@ async def get_available_slots(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Find the PT
+    # ── Find the PT ───────────────────────────────────────────────────────────
     if user.role == "pt":
         pt_id = user.id
     else:
@@ -137,10 +141,11 @@ async def get_available_slots(
 
     day_of_week = target_date.weekday()  # 0=Monday
 
-    # Get availability for this day
+    # ── Step 1: Get AVAILABLE (non-blocked) slots for this day ────────────────
     result = await db.execute(
         select(AvailabilitySlot).where(
             AvailabilitySlot.pt_id == pt_id,
+            AvailabilitySlot.is_blocked == False,  # ← EXCLUDE BLOCKED
             (
                 (AvailabilitySlot.is_recurring == True)
                 & (AvailabilitySlot.day_of_week == day_of_week)
@@ -149,11 +154,22 @@ async def get_available_slots(
                 (AvailabilitySlot.is_recurring == False)
                 & (AvailabilitySlot.specific_date == target_date)
             ),
+        ).order_by(AvailabilitySlot.start_time)
+    )
+    available_slots = list(result.scalars().all())
+
+    # ── Step 2: Get BLOCKED one-off overrides for this specific date ──────────
+    # e.g. PT blocked a recurring day for today specifically
+    result = await db.execute(
+        select(AvailabilitySlot).where(
+            AvailabilitySlot.pt_id == pt_id,
+            AvailabilitySlot.is_blocked == True,
+            AvailabilitySlot.specific_date == target_date,
         )
     )
-    slots = list(result.scalars().all())
+    blocked_overrides = list(result.scalars().all())
 
-    # Get existing bookings for this date
+    # ── Step 3: Get existing bookings for this date ───────────────────────────
     result = await db.execute(
         select(Booking).where(
             Booking.pt_id == pt_id,
@@ -163,21 +179,41 @@ async def get_available_slots(
     )
     existing_bookings = list(result.scalars().all())
 
-    # Build available 1-hour slots
-    available = []
-    for slot in slots:
+    # ── Step 4: Build 1-hour increments, filtering blocked & booked ───────────
+    available: list[AvailableSlotResponse] = []
+    seen_start_times: set[time] = set()
+
+    for slot in available_slots:
         current = slot.start_time
+
         while current < slot.end_time:
-            next_hour = time(current.hour + 1, current.minute)
+            # Build next hour boundary
+            next_h = current.hour + 1
+            if next_h > 23:
+                break
+            next_hour = time(next_h, current.minute)
             if next_hour > slot.end_time:
                 break
 
-            # Check if this slot is already booked
-            is_booked = any(
-                b.start_time <= current and b.end_time > current
+            # Skip if we already have this start time (deduplicates
+            # overlapping recurring + one-off slots for same hour)
+            if current in seen_start_times:
+                current = next_hour
+                continue
+
+            # Check if a blocked override covers this hour
+            is_blocked_by_override = any(
+                b.start_time <= current < b.end_time
+                for b in blocked_overrides
+            )
+
+            # Check if already booked
+            is_already_booked = any(
+                b.start_time <= current < b.end_time
                 for b in existing_bookings
             )
-            if not is_booked:
+
+            if not is_blocked_by_override and not is_already_booked:
                 available.append(
                     AvailableSlotResponse(
                         date=target_date,
@@ -185,11 +221,14 @@ async def get_available_slots(
                         end_time=next_hour,
                     )
                 )
+                seen_start_times.add(current)
+
             current = next_hour
 
+    # ── Step 5: Sort chronologically ─────────────────────────────────────────
+    available.sort(key=lambda s: s.start_time)
+
     return available
-
-
 # ── Bookings CRUD ──
 
 @router.get("/bookings", response_model=list[BookingResponse])

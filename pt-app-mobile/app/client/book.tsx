@@ -50,6 +50,27 @@ export default function BookScreen() {
       const dateStr = selectedDate.toISOString().split('T')[0];
       const res = await API.get(`/bookings/available-slots?date=${dateStr}`);
       setSlots(res.data);
+      const sorted = [...(res.data as any[])].sort((a, b) => {
+      // Recurring slots before one-off
+      if (a.is_recurring !== b.is_recurring) {
+        return a.is_recurring ? -1 : 1;
+      }
+      // Sort by day_of_week (recurring)
+      if (a.day_of_week !== null && b.day_of_week !== null) {
+        if (a.day_of_week !== b.day_of_week) {
+          return a.day_of_week - b.day_of_week;
+        }
+      }
+      // Sort by specific_date (one-off)
+      if (a.specific_date && b.specific_date) {
+        if (a.specific_date !== b.specific_date) {
+          return a.specific_date.localeCompare(b.specific_date);
+        }
+      }
+      // Finally sort by start_time within same day
+      return a.start_time.localeCompare(b.start_time);
+    });
+    setSlots(sorted);
     } catch (err) {
       console.error('Failed to fetch slots:', err);
       setSlots([]);
