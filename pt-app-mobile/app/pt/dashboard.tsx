@@ -1,11 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
+  View, Text, StyleSheet, ScrollView,
+  TouchableOpacity, RefreshControl,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,30 +15,31 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 export default function DashboardScreen() {
   const { user, profile } = useAuthStore();
   const router = useRouter();
-  const [stats, setStats] = useState({ clients: 0, bookings: 0, plans: 0 });
+  const [stats, setStats] = useState({ clients: 0, upcomingBookings: 0, activePackages: 0 });
   const [upcomingBookings, setUpcomingBookings] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     try {
-      const [clientsRes, bookingsRes, plansRes] = await Promise.allSettled([
+      const [clientsRes, bookingsRes, packsRes] = await Promise.allSettled([
         API.get('/clients'),
         API.get('/bookings'),
-        API.get('/workout-plans'),
+        API.get('/payments/session-packs'),
       ]);
 
-      const clients = clientsRes.status === 'fulfilled' ? clientsRes.value.data : [];
+      const clients  = clientsRes.status === 'fulfilled'  ? clientsRes.value.data  : [];
       const bookings = bookingsRes.status === 'fulfilled' ? bookingsRes.value.data : [];
-      const plans = plansRes.status === 'fulfilled' ? plansRes.value.data : [];
+      const packs    = packsRes.status === 'fulfilled'    ? packsRes.value.data    : [];
 
       setStats({
-        clients: clients.length,
-        bookings: bookings.filter((b: any) => b.status === 'confirmed' || b.status === 'pending').length,
-        plans: plans.filter((p: any) => p.status === 'active').length,
+        clients:         clients.filter((c: any) => c.status === 'active').length,
+        upcomingBookings: bookings.filter((b: any) =>
+          new Date(b.date) >= new Date(new Date().toDateString()) &&
+          (b.status === 'booked' || b.status === 'confirmed')
+        ).length,
+        activePackages: packs.filter((p: any) => p.status === 'active').length,
       });
 
       setUpcomingBookings(
@@ -88,17 +85,17 @@ export default function DashboardScreen() {
           <View style={styles.statCard}>
             <Ionicons name="people-outline" size={20} color={colors.gray500} />
             <Text style={styles.statValue}>{stats.clients}</Text>
-            <Text style={styles.statLabel}>Clients</Text>
+            <Text style={styles.statLabel}>Active{'\n'}Clients</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="calendar-outline" size={20} color={colors.gray500} />
-            <Text style={styles.statValue}>{stats.bookings}</Text>
-            <Text style={styles.statLabel}>Upcoming</Text>
+            <Text style={styles.statValue}>{stats.upcomingBookings}</Text>
+            <Text style={styles.statLabel}>Upcoming{'\n'}Sessions</Text>
           </View>
           <View style={styles.statCard}>
-            <Ionicons name="clipboard-outline" size={20} color={colors.gray500} />
-            <Text style={styles.statValue}>{stats.plans}</Text>
-            <Text style={styles.statLabel}>Active Plans</Text>
+            <Ionicons name="wallet-outline" size={20} color={colors.gray500} />
+            <Text style={styles.statValue}>{stats.activePackages}</Text>
+            <Text style={styles.statLabel}>Active{'\n'}Packages</Text>
           </View>
         </View>
 
@@ -107,17 +104,17 @@ export default function DashboardScreen() {
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => router.push('/pt/clients')}
+            onPress={() => router.push('/pt/add-client')}
           >
             <Ionicons name="person-add-outline" size={20} color={colors.black} />
-            <Text style={styles.actionText}>New Client</Text>
+            <Text style={styles.actionText}>Add Client</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={() => router.push('/pt/calendar')}
           >
             <Ionicons name="time-outline" size={20} color={colors.black} />
-            <Text style={styles.actionText}>New Slot</Text>
+            <Text style={styles.actionText}>Set Slots</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.actionBtn}
@@ -155,7 +152,7 @@ export default function DashboardScreen() {
                 </View>
                 <Badge
                   label={booking.status}
-                  variant={booking.status === 'confirmed' ? 'active' : 'pending'}
+                  variant={booking.status === 'booked' ? 'active' : 'pending'}
                 />
               </View>
             </Card>
@@ -167,115 +164,33 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.gray50,
+  container:   { flex: 1, backgroundColor: colors.gray50 },
+  scroll:      { padding: spacing.xl },
+  header:      { marginBottom: spacing.xxl },
+  greeting:    { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
+  subtitle:    { fontSize: fontSize.sm, color: colors.gray400, marginTop: spacing.xs },
+  statsRow:    { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xxl },
+  statCard:    {
+    flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.md,
+    padding: spacing.lg, alignItems: 'center', borderWidth: 1, borderColor: colors.gray200,
   },
-  scroll: {
-    padding: spacing.xl,
+  statValue:   { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black, marginTop: spacing.sm },
+  statLabel:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, textAlign: 'center' },
+  sectionTitle:{ fontSize: fontSize.lg, fontWeight: '600', color: colors.black, marginBottom: spacing.md },
+  actionsRow:  { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xxl },
+  actionBtn:   {
+    flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.sm,
+    padding: spacing.lg, alignItems: 'center', borderWidth: 1,
+    borderColor: colors.gray200, gap: spacing.sm,
   },
-  header: {
-    marginBottom: spacing.xxl,
-  },
-  greeting: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.black,
-  },
-  subtitle: {
-    fontSize: fontSize.sm,
-    color: colors.gray400,
-    marginTop: spacing.xs,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.xxl,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.gray200,
-  },
-  statValue: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.black,
-    marginTop: spacing.sm,
-  },
-  statLabel: {
-    fontSize: fontSize.xs,
-    color: colors.gray400,
-    marginTop: spacing.xs,
-  },
-  sectionTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.black,
-    marginBottom: spacing.md,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.xxl,
-  },
-  actionBtn: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.sm,
-    padding: spacing.lg,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.gray200,
-    gap: spacing.sm,
-  },
-  actionText: {
-    fontSize: fontSize.xs,
-    fontWeight: '500',
-    color: colors.gray700,
-  },
-  bookingCard: {
-    marginBottom: spacing.sm,
-  },
-  bookingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bookingDate: {
-    alignItems: 'center',
-    marginRight: spacing.lg,
-    minWidth: 40,
-  },
-  bookingDay: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.black,
-  },
-  bookingMonth: {
-    fontSize: fontSize.xs,
-    color: colors.gray400,
-    textTransform: 'uppercase',
-  },
-  bookingInfo: {
-    flex: 1,
-  },
-  bookingType: {
-    fontSize: fontSize.md,
-    fontWeight: '500',
-    color: colors.black,
-  },
-  bookingTime: {
-    fontSize: fontSize.sm,
-    color: colors.gray400,
-    marginTop: 2,
-  },
-  emptyText: {
-    fontSize: fontSize.sm,
-    color: colors.gray400,
-    textAlign: 'center',
-  },
+  actionText:  { fontSize: fontSize.xs, fontWeight: '500', color: colors.gray700 },
+  bookingCard: { marginBottom: spacing.sm },
+  bookingRow:  { flexDirection: 'row', alignItems: 'center' },
+  bookingDate: { alignItems: 'center', marginRight: spacing.lg, minWidth: 40 },
+  bookingDay:  { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
+  bookingMonth:{ fontSize: fontSize.xs, color: colors.gray400, textTransform: 'uppercase' },
+  bookingInfo: { flex: 1 },
+  bookingType: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  bookingTime: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
+  emptyText:   { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 });

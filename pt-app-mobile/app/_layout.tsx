@@ -15,20 +15,34 @@ export default function RootLayout() {
   useEffect(() => {
     if (!isInitialized) return;
 
-    const inAuthGroup = segments[0] === 'pt' || segments[0] === 'client';
+    const inPTGroup     = segments[0] === 'pt';
+    const inClientGroup = segments[0] === 'client';
+    const inAuthGroup   = inPTGroup || inClientGroup;
 
     if (!user) {
-      // Not logged in, go to login
-      router.replace('/login');
-    } else if (user && !inAuthGroup) {
-      // Logged in but not in the right group, redirect based on role
-      if (role === 'pt') {
-        router.replace('/pt/dashboard');
-      } else if (role === 'client') {
-        router.replace('/client/home');
+      // Not logged in → login
+      if (segments[0] !== 'login') {
+        router.replace('/login');
       }
+      return;
     }
-  }, [user, role, isInitialized]);
+
+    // Logged in but wrong role for route → redirect to correct home
+    if (role === 'pt' && inClientGroup) {
+      router.replace('/pt/dashboard');
+      return;
+    }
+    if (role === 'client' && inPTGroup) {
+      router.replace('/client/home');
+      return;
+    }
+
+    // Logged in but at root or login page → go to role home
+    if (!inAuthGroup) {
+      if (role === 'pt')     router.replace('/pt/dashboard');
+      else if (role === 'client') router.replace('/client/home');
+    }
+  }, [user, role, isInitialized, segments[0]]);
 
   if (!isInitialized) {
     return <LoadingScreen />;

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, ActivityIndicator, Alert, Modal, TextInput,
+  RefreshControl, ActivityIndicator, Alert, Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,38 +11,44 @@ import Card from '@/components/Card';
 import Badge from '@/components/Badge';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
-type Tab = 'subscriptions' | 'invoices';
+type Tab = 'packs' | 'invoices';
+
+const PRESET_PACKS = [
+  { label: '5 Sessions',  sessions: 5  },
+  { label: '10 Sessions', sessions: 10 },
+  { label: '20 Sessions', sessions: 20 },
+];
 
 export default function PaymentsScreen() {
-  const [activeTab, setActiveTab]           = useState<Tab>('subscriptions');
-  const [subscriptions, setSubscriptions]   = useState<any[]>([]);
-  const [invoices, setInvoices]             = useState<any[]>([]);
-  const [clients, setClients]               = useState<any[]>([]);
-  const [loading, setLoading]               = useState(true);
-  const [refreshing, setRefreshing]         = useState(false);
-  const [actionLoading, setActionLoading]   = useState<string | null>(null);
+  const [activeTab, setActiveTab]         = useState<Tab>('packs');
+  const [packs, setPacks]                 = useState<any[]>([]);
+  const [invoices, setInvoices]           = useState<any[]>([]);
+  const [clients, setClients]             = useState<any[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [refreshing, setRefreshing]       = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // New subscription modal
-  const [newSubModal, setNewSubModal] = useState(false);
-  const [subForm, setSubForm] = useState({
-    client_id:       '',
-    plan_name:       '',
-    amount:          '',
-    billing_cycle:   'monthly',
-    stripe_customer_id: '',
-    stripe_price_id: '',
+  // New pack modal
+  const [newPackModal, setNewPackModal] = useState(false);
+  const [packForm, setPackForm] = useState({
+    client_id:    '',
+    pack_name:    '',
+    total_sessions: 10,
+    price_pence:  '',
+    notes:        '',
   });
+  const [savingPack, setSavingPack] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     try {
-      const [sR, iR, cR] = await Promise.allSettled([
-        API.get('/payments/subscriptions'),
+      const [pR, iR, cR] = await Promise.allSettled([
+        API.get('/payments/session-packs'),
         API.get('/payments/invoices'),
         API.get('/clients'),
       ]);
-      if (sR.status === 'fulfilled') setSubscriptions(sR.value.data);
+      if (pR.status === 'fulfilled') setPacks(pR.value.data);
       if (iR.status === 'fulfilled') setInvoices(iR.value.data);
       if (cR.status === 'fulfilled') setClients(cR.value.data);
     } catch (e) {
@@ -57,56 +64,123 @@ export default function PaymentsScreen() {
     setRefreshing(false);
   };
 
-  const handleAction = (subId: string, action: 'cancel' | 'pause' | 'resume') => {
-    const labels: Record<string, string> = {
-      cancel:  'Cancel this subscription?',
-      pause:   'Pause this subscription?',
-      resume:  'Resume this subscription?',
-    };
-    Alert.alert(labels[action], undefined, [
+  const handleUseSession = (pack: any) => {
+    if (pack.sessions_remaining <= 0) {
+      Alert.alert('No sessions remaining', 'This pack is exhausted.');
+      return;
+    }
+    Alert.alert(
+      'Use 1 Session',
+      `Mark 1 session as used for ${clientName(pack.client_id)}?\n${pack.sessions_remaining - 1} will remain.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            setActionLoading(pack.id);
+            try {
+              const res = await API.put(`/payments/session-packs/${pack.id}/adjust`, {
+                adjustment: -1,
+                reason: 'Session used',
+              });
+              setPacks((prev) => prev.map((p) => p.id === pack.id ? res.data : p));
+            } catch (err: any) {
+              Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
+            } finally {
+              setActionLoading(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleAddSession = (pack: any) => {
+    Alert.alert(
+      'Add 1 Session',
+      `Add 1 bonus session to ${clientName(pack.client_id)}'s pack?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add',
+          onPress: async () => {
+            setActionLoading(pack.id);
+            try {
+              const res = await API.put(`/payments/session-packs/${pack.id}/adjust`, {
+                adjustment: 1,
+                reason: 'Bonus session added',
+              });
+              setPacks((prev) => prev.map((p) => p.id === pack.id ? res.data : p));
+            } catch (err: any) {
+              Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
+            } finally {
+              setActionLoading(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCancelPack = (packId: string) => {
+    Alert.alert('Cancel Pack', 'Are you sure?', [
       { text: 'No', style: 'cancel' },
       {
-        text: 'Yes',
-        style: action === 'cancel' ? 'destructive' : 'default',
+        text: 'Cancel Pack',
+        style: 'destructive',
         onPress: async () => {
-          setActionLoading(subId);
           try {
-            const res = await API.put(`/payments/subscriptions/${subId}`, { action });
-            setSubscriptions((prev) =>
-              prev.map((s) => (s.id === subId ? res.data : s))
-            );
+            await API.delete(`/payments/session-packs/${packId}`);
+            setPacks((prev) => prev.map((p) => p.id === packId ? { ...p, status: 'cancelled' } : p));
           } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail ?? 'Action failed');
-          } finally {
-            setActionLoading(null);
+            Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
           }
         },
       },
     ]);
   };
 
-  const fmtPence = (p: number, currency = 'GBP') =>
-    new Intl.NumberFormat('en-GB', { style: 'currency', currency }).format(p / 100);
+  const handleCreatePack = async () => {
+    if (!packForm.client_id || !packForm.pack_name || !packForm.price_pence) {
+      Alert.alert('Missing fields', 'Client, pack name, and price are required.');
+      return;
+    }
+    setSavingPack(true);
+    try {
+      const res = await API.post('/payments/session-packs', {
+        client_id:       packForm.client_id,
+        pack_name:       packForm.pack_name,
+        total_sessions:  packForm.total_sessions,
+        price_paid_pence: parseInt(packForm.price_pence) * 100, // £ → pence
+        notes:           packForm.notes || null,
+      });
+      setPacks((prev) => [res.data, ...prev]);
+      setNewPackModal(false);
+      setPackForm({ client_id: '', pack_name: '', total_sessions: 10, price_pence: '', notes: '' });
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail ?? 'Failed to create pack');
+    } finally {
+      setSavingPack(false);
+    }
+  };
+
+  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? 'Unknown';
+
+  const fmtMoney = (pence: number) =>
+    `£${(pence / 100).toFixed(2)}`;
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   const statusVariant = (s: string) =>
     s === 'active'    ? 'active'
-    : s === 'paused'  ? 'pending'
-    : s === 'past_due'? 'danger'
-    : 'inactive';
+    : s === 'exhausted'? 'inactive'
+    : 'danger';
 
-  const clientName = (id: string) =>
-    clients.find((c) => c.id === id)?.name ?? 'Unknown';
-
-  // ── Stats bar ──────────────────────────────────────────────────────────
-
-  const active   = subscriptions.filter((s) => s.status === 'active').length;
-  const pastDue  = subscriptions.filter((s) => s.status === 'past_due').length;
-  const monthlyMRR = subscriptions
-    .filter((s) => s.status === 'active' && s.billing_cycle === 'monthly')
-    .reduce((sum, s) => sum + s.amount_pence, 0);
+  // Stats
+  const activePacks   = packs.filter((p) => p.status === 'active');
+  const totalSessions = activePacks.reduce((s, p) => s + p.sessions_remaining, 0);
+  const totalRevenue  = invoices.reduce((s, i) => s + i.amount_pence, 0);
 
   if (loading) {
     return (
@@ -122,42 +196,40 @@ export default function PaymentsScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Payments</Text>
-          <Text style={styles.subtitle}>Stripe subscription management</Text>
+          <Text style={styles.subtitle}>Session pack management</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setNewSubModal(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={() => setNewPackModal(true)}>
           <Ionicons name="add" size={22} color={colors.white} />
         </TouchableOpacity>
       </View>
 
-      {/* MRR stats */}
+      {/* Stats */}
       <View style={styles.statsRow}>
         <View style={styles.statCard}>
-          <Text style={styles.statVal}>{active}</Text>
-          <Text style={styles.statLabel}>Active</Text>
+          <Text style={styles.statVal}>{activePacks.length}</Text>
+          <Text style={styles.statLabel}>Active{'\n'}Packs</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={[styles.statVal, pastDue > 0 && { color: colors.red500 }]}>
-            {pastDue}
-          </Text>
-          <Text style={styles.statLabel}>Past Due</Text>
+          <Text style={styles.statVal}>{totalSessions}</Text>
+          <Text style={styles.statLabel}>Sessions{'\n'}Remaining</Text>
         </View>
         <View style={[styles.statCard, { flex: 2 }]}>
-          <Text style={styles.statVal}>{fmtPence(monthlyMRR)}</Text>
-          <Text style={styles.statLabel}>Monthly Revenue</Text>
+          <Text style={styles.statVal}>{fmtMoney(totalRevenue)}</Text>
+          <Text style={styles.statLabel}>Total Revenue</Text>
         </View>
       </View>
 
       {/* Tabs */}
       <View style={styles.tabRow}>
-        {(['subscriptions', 'invoices'] as Tab[]).map((t) => (
+        {(['packs', 'invoices'] as Tab[]).map((t) => (
           <TouchableOpacity
             key={t}
             style={[styles.tab, activeTab === t && styles.tabActive]}
             onPress={() => setActiveTab(t)}
           >
             <Text style={[styles.tabTxt, activeTab === t && styles.tabTxtActive]}>
-              {t === 'subscriptions'
-                ? `Subscriptions (${subscriptions.length})`
+              {t === 'packs'
+                ? `Session Packs (${packs.length})`
                 : `Invoices (${invoices.length})`}
             </Text>
           </TouchableOpacity>
@@ -168,91 +240,91 @@ export default function PaymentsScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* ── SUBSCRIPTIONS ── */}
-        {activeTab === 'subscriptions' && (
-          subscriptions.length === 0 ? (
+        {/* ── SESSION PACKS ── */}
+        {activeTab === 'packs' && (
+          packs.length === 0 ? (
             <View style={styles.empty}>
-              <Ionicons name="card-outline" size={48} color={colors.gray300} />
-              <Text style={styles.emptyTitle}>No subscriptions yet</Text>
-              <Text style={styles.emptyText}>
-                Tap + to create a client subscription via Stripe.
-              </Text>
+              <Ionicons name="wallet-outline" size={48} color={colors.gray300} />
+              <Text style={styles.emptyTitle}>No session packs yet</Text>
+              <Text style={styles.emptyText}>Tap + to create a session pack for a client.</Text>
             </View>
           ) : (
-            subscriptions.map((sub) => {
-              const busy = actionLoading === sub.id;
+            packs.map((pack) => {
+              const busy = actionLoading === pack.id;
+              const pct  = pack.total_sessions > 0
+                ? (pack.sessions_remaining / pack.total_sessions) * 100
+                : 0;
               return (
-                <Card key={sub.id} style={styles.subCard}>
-                  <View style={styles.subHeader}>
+                <Card key={pack.id} style={styles.packCard}>
+                  {/* Header row */}
+                  <View style={styles.packHeader}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.subClient}>{clientName(sub.client_id)}</Text>
-                      <Text style={styles.subPlan}>{sub.plan_name}</Text>
+                      <Text style={styles.packClient}>{clientName(pack.client_id)}</Text>
+                      <Text style={styles.packName}>{pack.pack_name}</Text>
                     </View>
-                    <Badge label={sub.status.replace('_', ' ')} variant={statusVariant(sub.status)} />
+                    <Badge
+                      label={pack.status}
+                      variant={statusVariant(pack.status)}
+                    />
                   </View>
 
-                  <View style={styles.subMeta}>
-                    <View style={styles.subMetaItem}>
-                      <Text style={styles.subMetaLabel}>Amount</Text>
-                      <Text style={styles.subMetaValue}>
-                        {fmtPence(sub.amount_pence, sub.currency.toUpperCase())} / {sub.billing_cycle}
-                      </Text>
+                  {/* Sessions counter */}
+                  <View style={styles.sessionCounter}>
+                    <View style={styles.sessionNumbers}>
+                      <Text style={styles.sessionRemaining}>{pack.sessions_remaining}</Text>
+                      <Text style={styles.sessionTotal}> / {pack.total_sessions} sessions</Text>
                     </View>
-                    {sub.current_period_end && (
-                      <View style={styles.subMetaItem}>
-                        <Text style={styles.subMetaLabel}>
-                          {sub.status === 'active' ? 'Renews' : 'Ends'}
-                        </Text>
-                        <Text style={styles.subMetaValue}>
-                          {fmtDate(sub.current_period_end)}
-                        </Text>
-                      </View>
-                    )}
-                    {sub.payment_method_last4 && (
-                      <View style={styles.subMetaItem}>
-                        <Text style={styles.subMetaLabel}>Card</Text>
-                        <Text style={styles.subMetaValue}>•••• {sub.payment_method_last4}</Text>
-                      </View>
-                    )}
+                    <Text style={styles.sessionPaid}>
+                      {fmtMoney(pack.price_paid_pence)} paid
+                    </Text>
                   </View>
 
-                  {/* Action buttons */}
-                  {busy ? (
-                    <ActivityIndicator color={colors.black} style={{ marginTop: spacing.md }} />
-                  ) : (
-                    <View style={styles.actionRow}>
-                      {sub.status === 'active' && (
-                        <>
-                          <TouchableOpacity
-                            style={styles.actionBtn}
-                            onPress={() => handleAction(sub.id, 'pause')}
-                          >
-                            <Ionicons name="pause-circle-outline" size={16} color={colors.gray600} />
-                            <Text style={styles.actionBtnTxt}>Pause</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.actionBtnDanger]}
-                            onPress={() => handleAction(sub.id, 'cancel')}
-                          >
-                            <Ionicons name="close-circle-outline" size={16} color={colors.red700} />
-                            <Text style={[styles.actionBtnTxt, { color: colors.red700 }]}>
-                              Cancel
-                            </Text>
-                          </TouchableOpacity>
-                        </>
-                      )}
-                      {sub.status === 'paused' && (
+                  {/* Progress bar */}
+                  <View style={styles.progressBar}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: `${pct}%` as any },
+                        pct <= 20 && { backgroundColor: colors.red500 },
+                        pct > 20 && pct <= 50 && { backgroundColor: '#F59E0B' },
+                      ]}
+                    />
+                  </View>
+
+                  {pack.notes ? (
+                    <Text style={styles.packNotes}>{pack.notes}</Text>
+                  ) : null}
+
+                  {/* Actions */}
+                  {pack.status !== 'cancelled' && (
+                    busy ? (
+                      <ActivityIndicator color={colors.black} style={{ marginTop: spacing.md }} />
+                    ) : (
+                      <View style={styles.actionRow}>
+                        <TouchableOpacity
+                          style={[styles.actionBtn, pack.sessions_remaining === 0 && styles.actionBtnDisabled]}
+                          onPress={() => handleUseSession(pack)}
+                          disabled={pack.sessions_remaining === 0}
+                        >
+                          <Ionicons name="remove-circle-outline" size={16} color={colors.gray600} />
+                          <Text style={styles.actionBtnTxt}>Use Session</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.actionBtn, { backgroundColor: colors.green50 }]}
-                          onPress={() => handleAction(sub.id, 'resume')}
+                          onPress={() => handleAddSession(pack)}
                         >
-                          <Ionicons name="play-circle-outline" size={16} color={colors.green700} />
-                          <Text style={[styles.actionBtnTxt, { color: colors.green700 }]}>
-                            Resume
-                          </Text>
+                          <Ionicons name="add-circle-outline" size={16} color={colors.green700} />
+                          <Text style={[styles.actionBtnTxt, { color: colors.green700 }]}>Add Session</Text>
                         </TouchableOpacity>
-                      )}
-                    </View>
+                        <TouchableOpacity
+                          style={[styles.actionBtn, styles.actionBtnDanger]}
+                          onPress={() => handleCancelPack(pack.id)}
+                        >
+                          <Ionicons name="close-circle-outline" size={16} color={colors.red700} />
+                          <Text style={[styles.actionBtnTxt, { color: colors.red700 }]}>Cancel</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
                   )}
                 </Card>
               );
@@ -266,7 +338,7 @@ export default function PaymentsScreen() {
             <View style={styles.empty}>
               <Ionicons name="receipt-outline" size={48} color={colors.gray300} />
               <Text style={styles.emptyTitle}>No invoices yet</Text>
-              <Text style={styles.emptyText}>Invoices will appear here after payments.</Text>
+              <Text style={styles.emptyText}>Invoices are created automatically when you add a session pack.</Text>
             </View>
           ) : (
             invoices.map((inv) => (
@@ -274,147 +346,117 @@ export default function PaymentsScreen() {
                 <View style={styles.invoiceRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.invoiceClient}>{clientName(inv.client_id)}</Text>
+                    <Text style={styles.invoiceDesc}>{inv.description}</Text>
                     <Text style={styles.invoiceDate}>{fmtDate(inv.date)}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: spacing.xs }}>
-                    <Text style={styles.invoiceAmt}>
-                      {fmtPence(inv.amount_pence)}
-                    </Text>
+                    <Text style={styles.invoiceAmt}>{fmtMoney(inv.amount_pence)}</Text>
                     <Badge
                       label={inv.status}
-                      variant={
-                        inv.status === 'paid'   ? 'active'
-                        : inv.status === 'failed'? 'danger'
-                        : 'pending'
-                      }
+                      variant={inv.status === 'paid' ? 'active' : 'danger'}
                     />
                   </View>
                 </View>
-                {inv.pdf_url && (
-                  <TouchableOpacity style={styles.pdfBtn}>
-                    <Ionicons name="document-text-outline" size={14} color={colors.gray600} />
-                    <Text style={styles.pdfBtnTxt}>View PDF</Text>
-                  </TouchableOpacity>
-                )}
               </Card>
             ))
           )
         )}
       </ScrollView>
 
-      {/* ── New Subscription Modal ── */}
-      <Modal visible={newSubModal} transparent animationType="slide">
+      {/* ── New Session Pack Modal ── */}
+      <Modal visible={newPackModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>New Subscription</Text>
-              <TouchableOpacity onPress={() => setNewSubModal(false)}>
+              <Text style={styles.modalTitle}>New Session Pack</Text>
+              <TouchableOpacity onPress={() => setNewPackModal(false)}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
 
-              <Text style={styles.fieldLabel}>Select Client</Text>
+              {/* Select Client */}
+              <Text style={styles.fieldLabel}>Select Client *</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                {clients.map((c: any) => (
+                {clients.filter((c: any) => c.status === 'active').map((c: any) => (
                   <TouchableOpacity
                     key={c.id}
-                    style={[styles.chip, subForm.client_id === c.id && styles.chipActive]}
-                    onPress={() => setSubForm((f) => ({ ...f, client_id: c.id }))}
+                    style={[styles.chip, packForm.client_id === c.id && styles.chipActive]}
+                    onPress={() => setPackForm((f) => ({ ...f, client_id: c.id }))}
                   >
-                    <Text style={[styles.chipTxt, subForm.client_id === c.id && styles.chipTxtActive]}>
+                    <Text style={[styles.chipTxt, packForm.client_id === c.id && styles.chipTxtActive]}>
                       {c.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
 
-              <Text style={styles.fieldLabel}>Plan Name</Text>
-              <TextInput
-                style={styles.input}
-                value={subForm.plan_name}
-                onChangeText={(v) => setSubForm((f) => ({ ...f, plan_name: v }))}
-                placeholder="e.g. Monthly PT Package"
-                placeholderTextColor={colors.gray400}
-              />
-
-              <Text style={styles.fieldLabel}>Amount (in pence / cents)</Text>
-              <TextInput
-                style={styles.input}
-                value={subForm.amount}
-                onChangeText={(v) => setSubForm((f) => ({ ...f, amount: v }))}
-                placeholder="e.g. 15000 = £150.00"
-                keyboardType="numeric"
-                placeholderTextColor={colors.gray400}
-              />
-
-              <Text style={styles.fieldLabel}>Billing Cycle</Text>
-              <View style={styles.cycleRow}>
-                {['monthly', 'weekly'].map((c) => (
+              {/* Number of sessions */}
+              <Text style={styles.fieldLabel}>Number of Sessions *</Text>
+              <View style={styles.presetsRow}>
+                {PRESET_PACKS.map((p) => (
                   <TouchableOpacity
-                    key={c}
-                    style={[styles.chip, subForm.billing_cycle === c && styles.chipActive]}
-                    onPress={() => setSubForm((f) => ({ ...f, billing_cycle: c }))}
+                    key={p.sessions}
+                    style={[
+                      styles.presetChip,
+                      packForm.total_sessions === p.sessions && styles.chipActive,
+                    ]}
+                    onPress={() => setPackForm((f) => ({
+                      ...f,
+                      total_sessions: p.sessions,
+                      pack_name: p.label,
+                    }))}
                   >
-                    <Text style={[styles.chipTxt, subForm.billing_cycle === c && styles.chipTxtActive]}>
-                      {c.charAt(0).toUpperCase() + c.slice(1)}
+                    <Text style={[
+                      styles.presetChipTxt,
+                      packForm.total_sessions === p.sessions && { color: colors.white },
+                    ]}>
+                      {p.label}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
-              <Text style={styles.fieldLabel}>Stripe Customer ID</Text>
+              {/* Pack name */}
+              <Text style={styles.fieldLabel}>Pack Name *</Text>
               <TextInput
                 style={styles.input}
-                value={subForm.stripe_customer_id}
-                onChangeText={(v) => setSubForm((f) => ({ ...f, stripe_customer_id: v }))}
-                placeholder="cus_..."
+                value={packForm.pack_name}
+                onChangeText={(v) => setPackForm((f) => ({ ...f, pack_name: v }))}
+                placeholder="e.g. 10 Session Pack"
                 placeholderTextColor={colors.gray400}
-                autoCapitalize="none"
               />
 
-              <Text style={styles.fieldLabel}>Stripe Price ID</Text>
+              {/* Price */}
+              <Text style={styles.fieldLabel}>Price (£) *</Text>
               <TextInput
                 style={styles.input}
-                value={subForm.stripe_price_id}
-                onChangeText={(v) => setSubForm((f) => ({ ...f, stripe_price_id: v }))}
-                placeholder="price_..."
+                value={packForm.price_pence}
+                onChangeText={(v) => setPackForm((f) => ({ ...f, price_pence: v }))}
+                placeholder="e.g. 500 for £500"
+                keyboardType="numeric"
                 placeholderTextColor={colors.gray400}
-                autoCapitalize="none"
               />
 
-              <View style={styles.infoBanner}>
-                <Ionicons name="information-circle-outline" size={15} color={colors.gray500} />
-                <Text style={styles.infoTxt}>
-                  Create the customer and price in your Stripe dashboard first, then enter the IDs here.
-                </Text>
-              </View>
+              {/* Notes */}
+              <Text style={styles.fieldLabel}>Notes (optional)</Text>
+              <TextInput
+                style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                value={packForm.notes}
+                onChangeText={(v) => setPackForm((f) => ({ ...f, notes: v }))}
+                placeholder="Any notes about this pack..."
+                placeholderTextColor={colors.gray400}
+                multiline
+              />
 
               <TouchableOpacity
-                style={styles.saveBtn}
-                onPress={async () => {
-                  if (!subForm.client_id || !subForm.plan_name || !subForm.stripe_customer_id || !subForm.stripe_price_id) {
-                    Alert.alert('Missing fields', 'Please fill in all required fields.');
-                    return;
-                  }
-                  try {
-                    await API.post('/payments/create-subscription', {
-                      client_id:          subForm.client_id,
-                      stripe_customer_id: subForm.stripe_customer_id,
-                      stripe_price_id:    subForm.stripe_price_id,
-                      plan_name:          subForm.plan_name,
-                      amount_pence:       parseInt(subForm.amount) || 0,
-                      billing_cycle:      subForm.billing_cycle,
-                    });
-                    setNewSubModal(false);
-                    setSubForm({ client_id: '', plan_name: '', amount: '', billing_cycle: 'monthly', stripe_customer_id: '', stripe_price_id: '' });
-                    await loadAll();
-                  } catch (err: any) {
-                    Alert.alert('Error', err.response?.data?.detail ?? 'Failed to create subscription');
-                  }
-                }}
+                style={[styles.saveBtn, savingPack && { opacity: 0.6 }]}
+                onPress={handleCreatePack}
+                disabled={savingPack}
               >
-                <Text style={styles.saveBtnTxt}>Create Subscription</Text>
+                {savingPack
+                  ? <ActivityIndicator color={colors.white} />
+                  : <Text style={styles.saveBtnTxt}>Create Session Pack</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -436,15 +478,13 @@ const styles = StyleSheet.create({
     width: 42, height: 42, borderRadius: 21,
     backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center',
   },
-
   statsRow: { flexDirection: 'row', paddingHorizontal: spacing.xl, gap: spacing.md, marginBottom: spacing.md },
   statCard: {
     flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.md,
     padding: spacing.lg, alignItems: 'center', borderWidth: 1, borderColor: colors.gray200,
   },
   statVal:   { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
-  statLabel: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
-
+  statLabel: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, textAlign: 'center' },
   tabRow: {
     flexDirection: 'row', marginHorizontal: spacing.xl,
     backgroundColor: colors.white, borderRadius: borderRadius.sm,
@@ -454,37 +494,39 @@ const styles = StyleSheet.create({
   tabActive:  { backgroundColor: colors.black },
   tabTxt:     { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
   tabTxtActive: { color: colors.white },
-
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
-
   empty: { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
   emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 
-  subCard:   { marginBottom: spacing.sm },
-  subHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
-  subClient: { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
-  subPlan:   { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  subMeta:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg, marginBottom: spacing.md },
-  subMetaItem:  {},
-  subMetaLabel: { fontSize: fontSize.xs, color: colors.gray400 },
-  subMetaValue: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
-  actionRow: { flexDirection: 'row', gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md },
+  packCard:        { marginBottom: spacing.sm },
+  packHeader:      { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
+  packClient:      { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
+  packName:        { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
+  sessionCounter:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: spacing.sm },
+  sessionNumbers:  { flexDirection: 'row', alignItems: 'baseline' },
+  sessionRemaining:{ fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
+  sessionTotal:    { fontSize: fontSize.sm, color: colors.gray400 },
+  sessionPaid:     { fontSize: fontSize.sm, color: colors.gray400 },
+  progressBar:     { height: 8, backgroundColor: colors.gray100, borderRadius: 4, overflow: 'hidden', marginBottom: spacing.sm },
+  progressFill:    { height: '100%', backgroundColor: colors.black, borderRadius: 4 },
+  packNotes:       { fontSize: fontSize.xs, color: colors.gray400, fontStyle: 'italic', marginBottom: spacing.sm },
+  actionRow:       { flexDirection: 'row', gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md, flexWrap: 'wrap' },
   actionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     backgroundColor: colors.gray100, paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm, borderRadius: borderRadius.full,
   },
-  actionBtnDanger: { backgroundColor: colors.red50 },
-  actionBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray600 },
+  actionBtnDisabled:{ opacity: 0.4 },
+  actionBtnDanger:  { backgroundColor: colors.red50 },
+  actionBtnTxt:     { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray600 },
 
-  invoiceCard:   { marginBottom: spacing.sm },
-  invoiceRow:    { flexDirection: 'row', alignItems: 'center' },
-  invoiceClient: { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
-  invoiceDate:   { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
-  invoiceAmt:    { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  pdfBtn:        { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md, alignSelf: 'flex-start' },
-  pdfBtnTxt:     { fontSize: fontSize.sm, color: colors.gray600, fontWeight: '500' },
+  invoiceCard: { marginBottom: spacing.sm },
+  invoiceRow:  { flexDirection: 'row', alignItems: 'center' },
+  invoiceClient:{ fontSize: fontSize.md, fontWeight: '600', color: colors.black },
+  invoiceDesc: { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
+  invoiceDate: { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+  invoiceAmt:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
@@ -496,13 +538,13 @@ const styles = StyleSheet.create({
     padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  modalBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
+  modalBody:  { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
   fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
   input: {
     borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.md, color: colors.black,
   },
-  chipScroll: { marginBottom: spacing.xs },
+  chipScroll:   { marginBottom: spacing.xs },
   chip: {
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full,
     borderWidth: 1, borderColor: colors.gray200, marginRight: spacing.sm, marginBottom: spacing.sm,
@@ -510,12 +552,12 @@ const styles = StyleSheet.create({
   chipActive:   { backgroundColor: colors.black, borderColor: colors.black },
   chipTxt:      { fontSize: fontSize.sm, color: colors.gray600 },
   chipTxtActive:{ color: colors.white },
-  cycleRow:     { flexDirection: 'row', gap: spacing.sm },
-  infoBanner: {
-    flexDirection: 'row', alignItems: 'flex-start', backgroundColor: colors.gray50,
-    padding: spacing.md, borderRadius: borderRadius.sm, gap: spacing.sm, marginTop: spacing.lg,
+  presetsRow:   { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xs },
+  presetChip: {
+    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    borderWidth: 1.5, borderColor: colors.gray200, alignItems: 'center',
   },
-  infoTxt: { fontSize: fontSize.xs, color: colors.gray500, flex: 1, lineHeight: 17 },
+  presetChipTxt:{ fontSize: fontSize.sm, fontWeight: '600', color: colors.gray600 },
   saveBtn: {
     backgroundColor: colors.black, borderRadius: borderRadius.sm,
     paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl,

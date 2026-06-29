@@ -1,4 +1,3 @@
-// pt-app-mobile/app/pt/_layout.tsx
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -67,10 +66,20 @@ export default function PTLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings-outline" size={size} color={color} />
+          ),
+        }}
+      />
 
-      {/* ── Hidden screens (navigable but not shown as tabs) ── */}
-      <Tabs.Screen name="add-client"     options={{ href: null }} />
-      <Tabs.Screen name="client-detail"  options={{ href: null }} />
+      {/* Hidden screens */}
+      <Tabs.Screen name="add-client"      options={{ href: null }} />
+      <Tabs.Screen name="client-detail"   options={{ href: null }} />
+      <Tabs.Screen name="workout-detail"  options={{ href: null }} />
     </Tabs>
   );
 }

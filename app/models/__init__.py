@@ -7,23 +7,11 @@ from app.models.exercise import Exercise
 from app.models.workout import WorkoutPlan, PlanWeek, PlanDay, PlanExercise
 from app.models.workout_log import WorkoutLog, WorkoutLogSet
 from app.models.booking import AvailabilitySlot, Booking
-from app.models.payment import Subscription, Invoice
+from app.models.payment import SessionPack, Invoice
 
 __all__ = [
-    "User",
-    "ClientProfile",
-    "Measurement",
-    "ProgressPhoto",
-    "Goal",
-    "Exercise",
-    "WorkoutPlan",
-    "PlanWeek",
-    "PlanDay",
-    "PlanExercise",
-    "WorkoutLog",
-    "WorkoutLogSet",
-    "AvailabilitySlot",
-    "Booking",
-    "Subscription",
-    "Invoice",
+    "User", "ClientProfile", "Measurement", "ProgressPhoto", "Goal",
+    "Exercise", "WorkoutPlan", "PlanWeek", "PlanDay", "PlanExercise",
+    "WorkoutLog", "WorkoutLogSet", "AvailabilitySlot", "Booking",
+    "SessionPack", "Invoice",
 ]

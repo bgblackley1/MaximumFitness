@@ -1,13 +1,17 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, ForeignKey, func
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
-class Subscription(Base):
-    __tablename__ = "subscriptions"
+class SessionPack(Base):
+    """
+    A block of sessions purchased by a client — e.g. '10 sessions for £500'.
+    Sessions are decremented when bookings are marked completed.
+    """
+    __tablename__ = "session_packs"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -15,26 +19,25 @@ class Subscription(Base):
     client_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("client_profiles.id"), nullable=False
     )
-    stripe_subscription_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
+    pt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    stripe_customer_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    plan_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    amount_pence: Mapped[int] = mapped_column(Integer, nullable=False)
+    pack_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    total_sessions: Mapped[int] = mapped_column(Integer, nullable=False)
+    sessions_remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_paid_pence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, default="gbp", server_default="gbp"
     )
-    billing_cycle: Mapped[str] = mapped_column(
-        String(20), nullable=False
-    )  # "monthly", "weekly"
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active", server_default="active"
-    )  # "active", "paused", "cancelled", "past_due"
-    current_period_end: Mapped[datetime | None] = mapped_column(
+    )  # "active", "exhausted", "expired", "cancelled"
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    payment_method_last4: Mapped[str | None] = mapped_column(
-        String(4), nullable=True
+    purchased_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -44,11 +47,11 @@ class Subscription(Base):
     )
 
     # Relationships
-    client = relationship("ClientProfile", back_populates="subscription")
-    invoices = relationship("Invoice", back_populates="subscription")
+    client = relationship("ClientProfile", back_populates="session_packs")
+    pt = relationship("User", foreign_keys=[pt_id])
 
     def __repr__(self) -> str:
-        return f"<Subscription {self.plan_name} status={self.status}>"
+        return f"<SessionPack {self.pack_name} remaining={self.sessions_remaining}>"
 
 
 class Invoice(Base):
@@ -57,28 +60,26 @@ class Invoice(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscription_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=False
-    )
     client_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("client_profiles.id"), nullable=False
     )
-    stripe_invoice_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
+    pack_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session_packs.id"), nullable=True
     )
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
     amount_pence: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False
-    )  # "paid", "failed", "pending", "void"
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="gbp", server_default="gbp"
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="paid")
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    pdf_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    subscription = relationship("Subscription", back_populates="invoices")
     client = relationship("ClientProfile", back_populates="invoices")
+    pack = relationship("SessionPack")
 
     def __repr__(self) -> str:
-        return f"<Invoice {self.date} amount={self.amount_pence} status={self.status}>"
+        return f"<Invoice {self.description} amount={self.amount_pence}>"

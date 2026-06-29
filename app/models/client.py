@@ -27,10 +27,8 @@ class ClientProfile(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active", server_default="active"
-    )  # "active", "paused", "archived"
-    plan_type: Mapped[str | None] = mapped_column(
-        String(50), nullable=True
-    )  # "monthly", "weekly", etc.
+    )
+    plan_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -39,36 +37,16 @@ class ClientProfile(Base):
     )
 
     # Relationships
-    user = relationship(
-        "User", back_populates="client_profile", foreign_keys=[user_id]
-    )
-    pt = relationship(
-        "User", back_populates="pt_clients", foreign_keys=[pt_id]
-    )
-    measurements = relationship(
-        "Measurement", back_populates="client", cascade="all, delete-orphan"
-    )
-    progress_photos = relationship(
-        "ProgressPhoto", back_populates="client", cascade="all, delete-orphan"
-    )
-    goals_list = relationship(
-        "Goal", back_populates="client", cascade="all, delete-orphan"
-    )
-    workout_plans = relationship(
-        "WorkoutPlan", back_populates="client"
-    )
-    workout_logs = relationship(
-        "WorkoutLog", back_populates="client"
-    )
-    bookings = relationship(
-        "Booking", back_populates="client"
-    )
-    subscription = relationship(
-        "Subscription", back_populates="client", uselist=False
-    )
-    invoices = relationship(
-        "Invoice", back_populates="client"
-    )
+    user = relationship("User", back_populates="client_profile", foreign_keys=[user_id])
+    pt = relationship("User", back_populates="pt_clients", foreign_keys=[pt_id])
+    measurements = relationship("Measurement", back_populates="client", cascade="all, delete-orphan")
+    progress_photos = relationship("ProgressPhoto", back_populates="client", cascade="all, delete-orphan")
+    goals_list = relationship("Goal", back_populates="client", cascade="all, delete-orphan")
+    workout_plans = relationship("WorkoutPlan", back_populates="client")
+    workout_logs = relationship("WorkoutLog", back_populates="client")
+    bookings = relationship("Booking", back_populates="client")
+    session_packs = relationship("SessionPack", back_populates="client", order_by="SessionPack.created_at.desc()")
+    invoices = relationship("Invoice", back_populates="client")
 
     def __repr__(self) -> str:
         return f"<ClientProfile {self.id} status={self.status}>"

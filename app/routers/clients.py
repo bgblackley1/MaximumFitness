@@ -14,14 +14,11 @@ from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
 router = APIRouter()
 
 
-# ── CLIENT SELF-ACCESS ───────────────────────────────────────────────────────
-
 @router.get("/me", response_model=ClientResponse)
 async def get_my_client_profile(
     user: User = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
 ):
-    """Client: returns own ClientProfile including their profile ID."""
     result = await db.execute(
         select(ClientProfile)
         .where(ClientProfile.user_id == user.id)
@@ -51,8 +48,6 @@ async def get_my_client_profile(
     )
 
 
-# ── PT MANAGED ROUTES ────────────────────────────────────────────────────────
-
 @router.get("", response_model=list[ClientResponse])
 async def list_clients(
     search: str | None = Query(None),
@@ -80,29 +75,30 @@ async def list_clients(
     return results
 
 
-@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_client(
     body: ClientCreate,
     pt: User = Depends(get_current_pt),
     db: AsyncSession = Depends(get_db),
 ):
-    client_profile = await client_service.create_client(
+    client_profile, temp_password = await client_service.create_client(
         db, pt_id=pt.id, name=body.name, email=body.email,
         age=body.age, sex=body.sex, height_cm=body.height_cm,
         starting_weight_kg=body.starting_weight_kg,
         goals=body.goals, injuries=body.injuries, notes=body.notes,
     )
-    return ClientResponse(
-        id=client_profile.id, user_id=client_profile.user_id,
-        pt_id=client_profile.pt_id, name=body.name, email=body.email,
-        age=client_profile.age, sex=client_profile.sex,
-        height_cm=client_profile.height_cm,
-        starting_weight_kg=client_profile.starting_weight_kg,
-        goals=client_profile.goals, injuries=client_profile.injuries,
-        notes=client_profile.notes, status=client_profile.status,
-        plan_type=client_profile.plan_type, created_at=client_profile.created_at,
-        last_check_in=None,
-    )
+    return {
+        "id": str(client_profile.id),
+        "user_id": str(client_profile.user_id),
+        "pt_id": str(client_profile.pt_id),
+        "name": body.name,
+        "email": body.email,
+        "status": client_profile.status,
+        "created_at": client_profile.created_at.isoformat(),
+        # ← PT sees this once so they can share it with the client
+        "temp_password": temp_password,
+        "message": f"Client created. Share these login details: email={body.email}, password={temp_password}",
+    }
 
 
 @router.get("/{client_id}", response_model=ClientResponse)

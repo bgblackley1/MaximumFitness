@@ -5,51 +5,60 @@ import datetime as dt
 from pydantic import BaseModel
 
 
-class CreateCustomerRequest(BaseModel):
+class SessionPackCreate(BaseModel):
     client_id: uuid.UUID
+    pack_name: str
+    total_sessions: int
+    price_paid_pence: int
+    currency: str = "gbp"
+    notes: str | None = None
+    expires_at: dt.datetime | None = None
 
 
-class CreateSubscriptionRequest(BaseModel):
-    client_id: uuid.UUID
-    stripe_customer_id: str
-    stripe_price_id: str
-    plan_name: str
-    amount_pence: int
-    currency: str | None = "gbp"
-    billing_cycle: str
+class SessionPackAdjust(BaseModel):
+    """Manually add or remove sessions (positive = add, negative = deduct)."""
+    adjustment: int
+    reason: str | None = None
 
 
-class SubscriptionUpdate(BaseModel):
-    action: str  # "cancel", "pause", "resume"
-
-
-class SubscriptionResponse(BaseModel):
+class SessionPackResponse(BaseModel):
     id: uuid.UUID
     client_id: uuid.UUID
-    stripe_subscription_id: str | None = None
-    stripe_customer_id: str
-    plan_name: str
-    amount_pence: int
+    pt_id: uuid.UUID
+    pack_name: str
+    total_sessions: int
+    sessions_remaining: int
+    price_paid_pence: int
     currency: str
-    billing_cycle: str
     status: str
-    current_period_end: dt.datetime | None = None
-    payment_method_last4: str | None = None
+    notes: str | None = None
+    expires_at: dt.datetime | None = None
+    purchased_at: dt.datetime
     created_at: dt.datetime
     updated_at: dt.datetime
 
     model_config = {"from_attributes": True}
 
 
+class InvoiceCreate(BaseModel):
+    client_id: uuid.UUID
+    pack_id: uuid.UUID | None = None
+    description: str
+    amount_pence: int
+    currency: str = "gbp"
+    status: str = "paid"
+    date: dt.datetime
+
+
 class InvoiceResponse(BaseModel):
     id: uuid.UUID
-    subscription_id: uuid.UUID
     client_id: uuid.UUID
-    stripe_invoice_id: str | None = None
+    pack_id: uuid.UUID | None = None
+    description: str
     amount_pence: int
+    currency: str
     status: str
     date: dt.datetime
-    pdf_url: str | None = None
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}

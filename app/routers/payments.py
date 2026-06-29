@@ -1,120 +1,161 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.user import User
 from app.models.client import ClientProfile
-from app.models.payment import Subscription, Invoice
+from app.models.payment import SessionPack, Invoice
 from app.middleware.auth import get_current_user, get_current_pt
-from app.services.stripe_service import stripe_service
 from app.schemas.payment import (
-    CreateCustomerRequest,
-    CreateSubscriptionRequest,
-    SubscriptionResponse,
+    SessionPackCreate,
+    SessionPackAdjust,
+    SessionPackResponse,
+    InvoiceCreate,
     InvoiceResponse,
-    SubscriptionUpdate,
 )
 
 router = APIRouter()
 
 
-@router.post("/create-customer")
-async def create_customer(
-    body: CreateCustomerRequest,
-    pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(ClientProfile)
-        .where(ClientProfile.id == body.client_id, ClientProfile.pt_id == pt.id)
-        .options(selectinload(ClientProfile.user))
-    )
-    client = result.scalar_one_or_none()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+# ── Session Packs ────────────────────────────────────────────────────────────
 
-    customer = await stripe_service.create_customer(
-        email=client.user.email, name=client.user.name
-    )
-    return {"stripe_customer_id": customer.id}
-
-
-@router.post("/create-subscription")
-async def create_subscription(
-    body: CreateSubscriptionRequest,
-    pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
-):
-    stripe_sub = await stripe_service.create_subscription(
-        customer_id=body.stripe_customer_id,
-        price_id=body.stripe_price_id,
-    )
-
-    subscription = Subscription(
-        client_id=body.client_id,
-        stripe_subscription_id=stripe_sub.id,
-        stripe_customer_id=body.stripe_customer_id,
-        plan_name=body.plan_name,
-        amount_pence=body.amount_pence,
-        currency=body.currency or "gbp",
-        billing_cycle=body.billing_cycle,
-        status="active",
-    )
-    db.add(subscription)
-    await db.flush()
-    return {"subscription_id": str(subscription.id), "stripe_subscription_id": stripe_sub.id}
-
-
-@router.get("/subscriptions", response_model=list[SubscriptionResponse])
-async def list_subscriptions(
+@router.get("/session-packs", response_model=list[SessionPackResponse])
+async def list_session_packs(
+    client_id: uuid.UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if user.role == "pt":
-        result = await db.execute(
-            select(Subscription)
-            .join(ClientProfile)
-            .where(ClientProfile.pt_id == user.id)
-            .options(selectinload(Subscription.client).selectinload(ClientProfile.user))
-        )
+        query = select(SessionPack).where(SessionPack.pt_id == user.id)
+        if client_id:
+            query = query.where(SessionPack.client_id == client_id)
     else:
         result = await db.execute(
-            select(Subscription)
-            .join(ClientProfile)
-            .where(ClientProfile.user_id == user.id)
+            select(ClientProfile).where(ClientProfile.user_id == user.id)
         )
+        cp = result.scalar_one_or_none()
+        if not cp:
+            raise HTTPException(status_code=404, detail="Client profile not found")
+        query = select(SessionPack).where(SessionPack.client_id == cp.id)
+
+    query = query.order_by(SessionPack.created_at.desc())
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
-@router.put("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
-async def update_subscription(
-    subscription_id: uuid.UUID,
-    body: SubscriptionUpdate,
+@router.post(
+    "/session-packs",
+    response_model=SessionPackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session_pack(
+    body: SessionPackCreate,
+    pt: User = Depends(get_current_pt),
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify client belongs to this PT
+    result = await db.execute(
+        select(ClientProfile).where(
+            ClientProfile.id == body.client_id,
+            ClientProfile.pt_id == pt.id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    pack = SessionPack(
+        client_id=body.client_id,
+        pt_id=pt.id,
+        pack_name=body.pack_name,
+        total_sessions=body.total_sessions,
+        sessions_remaining=body.total_sessions,
+        price_paid_pence=body.price_paid_pence,
+        currency=body.currency,
+        notes=body.notes,
+        expires_at=body.expires_at,
+        purchased_at=datetime.utcnow(),
+    )
+    db.add(pack)
+
+    # Auto-create an invoice
+    invoice = Invoice(
+        client_id=body.client_id,
+        description=f"{body.pack_name} ({body.total_sessions} sessions)",
+        amount_pence=body.price_paid_pence,
+        currency=body.currency,
+        status="paid",
+        date=datetime.utcnow(),
+    )
+    db.add(invoice)
+    await db.flush()
+
+    # Link invoice to pack
+    invoice.pack_id = pack.id
+    await db.flush()
+
+    return pack
+
+
+@router.put("/session-packs/{pack_id}/adjust", response_model=SessionPackResponse)
+async def adjust_sessions(
+    pack_id: uuid.UUID,
+    body: SessionPackAdjust,
+    pt: User = Depends(get_current_pt),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually add or deduct sessions from a pack (e.g. mark session as used)."""
+    result = await db.execute(
+        select(SessionPack).where(
+            SessionPack.id == pack_id,
+            SessionPack.pt_id == pt.id,
+        )
+    )
+    pack = result.scalar_one_or_none()
+    if not pack:
+        raise HTTPException(status_code=404, detail="Session pack not found")
+
+    new_remaining = pack.sessions_remaining + body.adjustment
+    if new_remaining < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot deduct {abs(body.adjustment)} — only {pack.sessions_remaining} remaining",
+        )
+
+    pack.sessions_remaining = new_remaining
+
+    if new_remaining == 0:
+        pack.status = "exhausted"
+    elif pack.status == "exhausted" and new_remaining > 0:
+        pack.status = "active"
+
+    await db.flush()
+    return pack
+
+
+@router.delete("/session-packs/{pack_id}")
+async def cancel_session_pack(
+    pack_id: uuid.UUID,
     pt: User = Depends(get_current_pt),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Subscription).where(Subscription.id == subscription_id)
+        select(SessionPack).where(
+            SessionPack.id == pack_id,
+            SessionPack.pt_id == pt.id,
+        )
     )
-    sub = result.scalar_one_or_none()
-    if not sub:
-        raise HTTPException(status_code=404, detail="Subscription not found")
-
-    if body.action == "cancel" and sub.stripe_subscription_id:
-        await stripe_service.cancel_subscription(sub.stripe_subscription_id)
-        sub.status = "cancelled"
-    elif body.action == "pause" and sub.stripe_subscription_id:
-        await stripe_service.pause_subscription(sub.stripe_subscription_id)
-        sub.status = "paused"
-    elif body.action == "resume" and sub.stripe_subscription_id:
-        await stripe_service.resume_subscription(sub.stripe_subscription_id)
-        sub.status = "active"
-
+    pack = result.scalar_one_or_none()
+    if not pack:
+        raise HTTPException(status_code=404, detail="Session pack not found")
+    pack.status = "cancelled"
     await db.flush()
-    return sub
+    return {"message": "Pack cancelled"}
 
+
+# ── Invoices ─────────────────────────────────────────────────────────────────
 
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
@@ -123,96 +164,22 @@ async def list_invoices(
     db: AsyncSession = Depends(get_db),
 ):
     if user.role == "pt":
-        query = select(Invoice).join(ClientProfile).where(ClientProfile.pt_id == user.id)
+        query = (
+            select(Invoice)
+            .join(ClientProfile, ClientProfile.id == Invoice.client_id)
+            .where(ClientProfile.pt_id == user.id)
+        )
         if client_id:
             query = query.where(Invoice.client_id == client_id)
     else:
         result = await db.execute(
             select(ClientProfile).where(ClientProfile.user_id == user.id)
         )
-        client = result.scalar_one_or_none()
-        if not client:
+        cp = result.scalar_one_or_none()
+        if not cp:
             raise HTTPException(status_code=404, detail="Client profile not found")
-        query = select(Invoice).where(Invoice.client_id == client.id)
+        query = select(Invoice).where(Invoice.client_id == cp.id)
 
     query = query.order_by(Invoice.date.desc())
     result = await db.execute(query)
     return list(result.scalars().all())
-
-
-@router.post("/setup-intent")
-async def create_setup_intent(
-    stripe_customer_id: str,
-    user: User = Depends(get_current_user),
-):
-    intent = await stripe_service.create_setup_intent(stripe_customer_id)
-    return {"client_secret": intent.client_secret}
-
-
-# ── Stripe webhook (NO auth middleware) ──
-
-@router.post("/webhooks/stripe", include_in_schema=False)
-async def stripe_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature", "")
-
-    try:
-        event = stripe_service.construct_webhook_event(payload, sig_header)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid signature")
-
-    event_type = event["type"]
-    data = event["data"]["object"]
-
-    if event_type == "invoice.paid":
-        result = await db.execute(
-            select(Invoice).where(Invoice.stripe_invoice_id == data["id"])
-        )
-        invoice = result.scalar_one_or_none()
-        if invoice:
-            invoice.status = "paid"
-
-    elif event_type == "invoice.payment_failed":
-        result = await db.execute(
-            select(Invoice).where(Invoice.stripe_invoice_id == data["id"])
-        )
-        invoice = result.scalar_one_or_none()
-        if invoice:
-            invoice.status = "failed"
-        # Also update subscription to past_due
-        sub_id = data.get("subscription")
-        if sub_id:
-            result = await db.execute(
-                select(Subscription).where(
-                    Subscription.stripe_subscription_id == sub_id
-                )
-            )
-            sub = result.scalar_one_or_none()
-            if sub:
-                sub.status = "past_due"
-
-    elif event_type in (
-        "customer.subscription.updated",
-        "customer.subscription.deleted",
-    ):
-        result = await db.execute(
-            select(Subscription).where(
-                Subscription.stripe_subscription_id == data["id"]
-            )
-        )
-        sub = result.scalar_one_or_none()
-        if sub:
-            stripe_status = data.get("status", "")
-            status_map = {
-                "active": "active",
-                "past_due": "past_due",
-                "canceled": "cancelled",
-                "unpaid": "past_due",
-            }
-            sub.status = status_map.get(stripe_status, sub.status)
-
-    await db.commit()
-    return {"status": "ok"}

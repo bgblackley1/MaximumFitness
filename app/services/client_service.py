@@ -1,7 +1,9 @@
 import uuid
+import secrets
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from fastapi import HTTPException
 from app.models.user import User
 from app.models.client import ClientProfile
 from app.models.measurement import Measurement
@@ -52,7 +54,6 @@ class ClientService:
                 selectinload(ClientProfile.goals_list),
                 selectinload(ClientProfile.workout_plans),
                 selectinload(ClientProfile.bookings),
-                selectinload(ClientProfile.subscription),
             )
         )
         return result.scalar_one_or_none()
@@ -70,12 +71,41 @@ class ClientService:
         goals: list | None = None,
         injuries: list | None = None,
         notes: str | None = None,
-    ) -> ClientProfile:
-        # Step 1: Create Supabase Auth user
-        supabase_user = await supabase_admin.create_user(email=email)
-        supabase_auth_id = supabase_user["id"]
+    ) -> tuple[ClientProfile, str]:
+        """
+        Returns (client_profile, temp_password).
+        The PT should share the temp_password with the client so they can log in.
+        We no longer call invite_user_by_email — that required SMTP to be
+        configured in Supabase which causes a 500 in dev/staging environments.
+        """
+        # 0. Check email not already in our DB
+        existing = await db.execute(select(User).where(User.email == email))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
 
-        # Step 2: Create User record
+        # 1. Generate a secure temporary password
+        temp_password = secrets.token_urlsafe(12)  # e.g. "xK9pL2mQrT4n"
+
+        # 2. Create Supabase Auth user (email_confirm=True skips verification email)
+        try:
+            supabase_user = await supabase_admin.create_user(
+                email=email,
+                password=temp_password,
+            )
+            supabase_auth_id = supabase_user["id"]
+        except Exception as e:
+            error_str = str(e)
+            if "already been registered" in error_str or "already exists" in error_str:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Email already registered in auth system",
+                )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create auth user: {error_str}",
+            )
+
+        # 3. Create User record
         user = User(
             email=email,
             name=name,
@@ -85,7 +115,7 @@ class ClientService:
         db.add(user)
         await db.flush()
 
-        # Step 3: Create ClientProfile
+        # 4. Create ClientProfile
         client_profile = ClientProfile(
             user_id=user.id,
             pt_id=pt_id,
@@ -100,10 +130,7 @@ class ClientService:
         db.add(client_profile)
         await db.flush()
 
-        # Step 4: Send invite email
-        await supabase_admin.invite_user_by_email(email)
-
-        return client_profile
+        return client_profile, temp_password
 
     @staticmethod
     async def update_client(
@@ -126,9 +153,7 @@ class ClientService:
         return client_profile
 
     @staticmethod
-    async def get_last_check_in(
-        db: AsyncSession, client_id: uuid.UUID
-    ):
+    async def get_last_check_in(db: AsyncSession, client_id: uuid.UUID):
         result = await db.execute(
             select(func.max(Measurement.date)).where(
                 Measurement.client_id == client_id
