@@ -12,17 +12,25 @@ export default function SettingsScreen() {
   const router = useRouter();
 
   const handleLogout = () => {
-    Alert.alert('Log out', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Log out',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
+    Alert.alert(
+      'Log out',
+      'Are you sure you want to log out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log out',
+          style: 'destructive',
+          onPress: () => {
+            // Fire and forget — state clears synchronously in logout()
+            // then we navigate immediately
+            logout().catch(console.error);
+            // Navigate straight away — state is already cleared
+            router.replace('/login');
+          },
         },
-      },
-    ]);
+      ],
+      { cancelable: true }
+    );
   };
 
   const displayName = profile?.full_name ?? user?.email?.split('@')[0] ?? 'PT';
@@ -102,11 +110,11 @@ const styles = StyleSheet.create({
   },
   logoutTxt:  { fontSize: fontSize.md, fontWeight: '600', color: colors.red500 },
 
-  hint:       {
+  hint: {
     fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center',
     backgroundColor: colors.gray100, padding: spacing.md,
     borderRadius: borderRadius.sm, marginBottom: spacing.lg,
     lineHeight: 20,
   },
-  version:    { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300 },
+  version: { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300 },
 });

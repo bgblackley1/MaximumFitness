@@ -23,6 +23,8 @@ const MUSCLE_GROUPS = [
 const CATEGORIES = ['Compound', 'Isolation', 'Cardio', 'Plyometric', 'Stretch'];
 const EQUIPMENT  = ['Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight', 'Kettlebell', 'Other'];
 
+const BLANK_EX = { name: '', category: '', muscle_group: '', equipment: '', cues: '', image_url: '' };
+
 export default function WorkoutsScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>('plans');
@@ -31,17 +33,22 @@ export default function WorkoutsScreen() {
   const [clients, setClients]     = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Exercise modal
+  // ── Create exercise modal ──
   const [exerciseModal, setExerciseModal] = useState(false);
-  const [exerciseForm, setExerciseForm] = useState({
-    name: '', category: '', muscle_group: '',
-    equipment: '', cues: '', image_url: '',
-  });
+  const [exerciseForm, setExerciseForm]   = useState(BLANK_EX);
   const [savingExercise, setSavingExercise] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [localImageUri, setLocalImageUri]   = useState<string | null>(null);
 
-  // Plan modal
+  // ── Edit exercise modal ──
+  const [editExModal, setEditExModal]   = useState(false);
+  const [editingEx, setEditingEx]       = useState<any | null>(null);
+  const [editExForm, setEditExForm]     = useState(BLANK_EX);
+  const [savingEditEx, setSavingEditEx] = useState(false);
+  const [editUploadingImg, setEditUploadingImg] = useState(false);
+  const [editLocalImg, setEditLocalImg] = useState<string | null>(null);
+
+  // ── Create plan modal ──
   const [planModal, setPlanModal] = useState(false);
   const [planForm, setPlanForm]   = useState({ title: '', goal_focus: '', client_id: '' });
   const [savingPlan, setSavingPlan] = useState(false);
@@ -67,11 +74,15 @@ export default function WorkoutsScreen() {
     setRefreshing(false);
   };
 
-  // ── Image picker ──────────────────────────────────────────────────────────
-  const pickExerciseImage = async () => {
+  // ── Image picker (shared) ─────────────────────────────────────────────────
+  const pickImage = async (
+    onUri: (uri: string) => void,
+    onUrl: (url: string) => void,
+    setUploading: (v: boolean) => void,
+  ) => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission needed', 'Allow access to your photo library to upload images.');
+      Alert.alert('Permission needed', 'Allow photo library access to upload images.');
       return;
     }
 
@@ -81,45 +92,41 @@ export default function WorkoutsScreen() {
       aspect: [4, 3],
       quality: 0.8,
     });
-
     if (result.canceled) return;
 
     const asset = result.assets[0];
-    setLocalImageUri(asset.uri);
-    setUploadingImage(true);
+    onUri(asset.uri);
+    setUploading(true);
 
     try {
-      // Convert URI to blob
       const response = await fetch(asset.uri);
       const blob     = await response.blob();
       const ext      = asset.uri.split('.').pop() ?? 'jpg';
       const fileName = `exercise_${Date.now()}.${ext}`;
 
-      // Upload to Supabase Storage (bucket: 'exercises' — must be public)
       const { data, error } = await supabase.storage
         .from('exercises')
         .upload(fileName, blob, { contentType: `image/${ext}`, upsert: true });
 
       if (error) {
         Alert.alert('Upload failed', error.message);
-        setLocalImageUri(null);
+        onUri('');
         return;
       }
 
       const { data: { publicUrl } } = supabase.storage
         .from('exercises')
         .getPublicUrl(fileName);
-
-      setExerciseForm((f) => ({ ...f, image_url: publicUrl }));
+      onUrl(publicUrl);
     } catch (err: any) {
       Alert.alert('Upload error', err.message ?? 'Unknown error');
-      setLocalImageUri(null);
+      onUri('');
     } finally {
-      setUploadingImage(false);
+      setUploading(false);
     }
   };
 
-  // ── Exercise CRUD ─────────────────────────────────────────────────────────
+  // ── Create exercise ───────────────────────────────────────────────────────
   const handleCreateExercise = async () => {
     if (!exerciseForm.name.trim()) {
       Alert.alert('Error', 'Exercise name is required');
@@ -129,15 +136,16 @@ export default function WorkoutsScreen() {
     try {
       const res = await API.post('/exercises', {
         name:         exerciseForm.name.trim(),
-        category:     exerciseForm.category   || null,
+        category:     exerciseForm.category     || null,
         muscle_group: exerciseForm.muscle_group || null,
-        equipment:    exerciseForm.equipment   || null,
-        cues:         exerciseForm.cues.trim() || null,
-        image_url:    exerciseForm.image_url   || null,
+        equipment:    exerciseForm.equipment    || null,
+        cues:         exerciseForm.cues.trim()  || null,
+        image_url:    exerciseForm.image_url    || null,
       });
       setExercises((prev) => [res.data, ...prev]);
       setExerciseModal(false);
-      resetExerciseForm();
+      setExerciseForm(BLANK_EX);
+      setLocalImageUri(null);
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.detail || 'Failed to create exercise');
     } finally {
@@ -145,8 +153,51 @@ export default function WorkoutsScreen() {
     }
   };
 
-  const handleDeleteExercise = (id: string) => {
-    Alert.alert('Delete Exercise', 'Are you sure?', [
+  // ── Open edit exercise ────────────────────────────────────────────────────
+  const openEditExercise = (ex: any) => {
+    setEditingEx(ex);
+    setEditExForm({
+      name:         ex.name ?? '',
+      category:     ex.category ?? '',
+      muscle_group: ex.muscle_group ?? '',
+      equipment:    ex.equipment ?? '',
+      cues:         ex.cues ?? '',
+      image_url:    ex.image_url ?? '',
+    });
+    setEditLocalImg(null);
+    setEditExModal(true);
+  };
+
+  // ── Save exercise edits ───────────────────────────────────────────────────
+  const handleSaveExercise = async () => {
+    if (!editExForm.name.trim() || !editingEx) {
+      Alert.alert('Error', 'Exercise name is required');
+      return;
+    }
+    setSavingEditEx(true);
+    try {
+      const res = await API.put(`/exercises/${editingEx.id}`, {
+        name:         editExForm.name.trim(),
+        category:     editExForm.category     || null,
+        muscle_group: editExForm.muscle_group || null,
+        equipment:    editExForm.equipment    || null,
+        cues:         editExForm.cues.trim()  || null,
+        image_url:    editExForm.image_url    || null,
+      });
+      setExercises((prev) => prev.map((e) => e.id === editingEx.id ? res.data : e));
+      setEditExModal(false);
+      setEditingEx(null);
+      setEditLocalImg(null);
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to update exercise');
+    } finally {
+      setSavingEditEx(false);
+    }
+  };
+
+  // ── Delete exercise ───────────────────────────────────────────────────────
+  const handleDeleteExercise = (id: string, name: string) => {
+    Alert.alert(`Delete "${name}"?`, 'This will soft-delete it (existing plans are unaffected).', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
@@ -162,15 +213,10 @@ export default function WorkoutsScreen() {
     ]);
   };
 
-  const resetExerciseForm = () => {
-    setExerciseForm({ name: '', category: '', muscle_group: '', equipment: '', cues: '', image_url: '' });
-    setLocalImageUri(null);
-  };
-
-  // ── Plan CRUD ─────────────────────────────────────────────────────────────
+  // ── Create plan ───────────────────────────────────────────────────────────
   const handleCreatePlan = async () => {
     if (!planForm.title.trim()) {
-      Alert.alert('Error', 'Plan title is required');
+      Alert.alert('Error', 'Routine name is required');
       return;
     }
     setSavingPlan(true);
@@ -180,22 +226,24 @@ export default function WorkoutsScreen() {
         goal_focus: planForm.goal_focus.trim() || null,
         client_id:  planForm.client_id || null,
         visibility: 'draft',
-        weeks: [{ week_number: 1, days: [{ day_label: 'Day 1', day_order: 1, exercises: [] }] }],
+        weeks: [{
+          week_number: 1,
+          days: [{ day_label: 'Workout', day_order: 1, exercises: [] }],
+        }],
       });
       setPlanModal(false);
       setPlanForm({ title: '', goal_focus: '', client_id: '' });
       await loadData();
-      // Navigate to the detail screen to start adding exercises
       router.push(`/pt/workout-detail?id=${res.data.plan_id}` as any);
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to create plan');
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to create routine');
     } finally {
       setSavingPlan(false);
     }
   };
 
   const handleArchivePlan = (planId: string) => {
-    Alert.alert('Archive Plan', 'Are you sure?', [
+    Alert.alert('Archive Routine', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Archive', style: 'destructive',
@@ -211,7 +259,7 @@ export default function WorkoutsScreen() {
     ]);
   };
 
-  // ── Render helpers ────────────────────────────────────────────────────────
+  // ── Chip picker component ─────────────────────────────────────────────────
   const ChipPicker = ({
     options, selected, onSelect,
   }: { options: string[]; selected: string; onSelect: (v: string) => void }) => (
@@ -228,33 +276,77 @@ export default function WorkoutsScreen() {
     </ScrollView>
   );
 
+  // ── ImageUploadField component ────────────────────────────────────────────
+  const ImageUploadField = ({
+    localUri, imageUrl, uploading,
+    onPick, onRemove,
+  }: {
+    localUri: string | null; imageUrl: string;
+    uploading: boolean; onPick: () => void; onRemove: () => void;
+  }) => (
+    <>
+      <TouchableOpacity
+        style={styles.imageUploadBtn}
+        onPress={onPick}
+        disabled={uploading}
+      >
+        {uploading ? (
+          <ActivityIndicator color={colors.gray600} />
+        ) : localUri || imageUrl ? (
+          <Image
+            source={{ uri: localUri || imageUrl }}
+            style={styles.imagePreview}
+            resizeMode="cover"
+          />
+        ) : (
+          <>
+            <Ionicons name="camera-outline" size={28} color={colors.gray400} />
+            <Text style={styles.imageUploadTxt}>Tap to upload image</Text>
+          </>
+        )}
+      </TouchableOpacity>
+      {(localUri || imageUrl) && !uploading && (
+        <TouchableOpacity style={styles.removeImageBtn} onPress={onRemove}>
+          <Text style={styles.removeImageTxt}>Remove image</Text>
+        </TouchableOpacity>
+      )}
+    </>
+  );
+
+  // ── Render items ──────────────────────────────────────────────────────────
   const renderPlan = ({ item }: { item: any }) => (
     <TouchableOpacity
       onPress={() => router.push(`/pt/workout-detail?id=${item.id}` as any)}
       onLongPress={() => handleArchivePlan(item.id)}
+      activeOpacity={0.8}
     >
       <Card style={styles.card}>
         <View style={styles.cardRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{item.title}</Text>
-            {item.goal_focus && <Text style={styles.cardSub}>{item.goal_focus}</Text>}
+            {item.goal_focus && (
+              <Text style={styles.cardSub}>{item.goal_focus}</Text>
+            )}
             {item.client_id && (
               <Text style={styles.cardClient}>
-                {clients.find((c: any) => c.id === item.client_id)?.name ?? 'Assigned to client'}
+                👤 {clients.find((c: any) => c.id === item.client_id)?.name ?? 'Assigned to client'}
               </Text>
             )}
             <Text style={styles.cardMeta}>
-              {new Date(item.created_at).toLocaleDateString('en-GB')} · Tap to edit
+              {new Date(item.created_at).toLocaleDateString('en-GB')} · Tap to edit · Long press to archive
             </Text>
           </View>
-          <Badge label={item.status || 'active'} variant={item.status === 'active' ? 'active' : 'inactive'} />
+          <Badge
+            label={item.status || 'active'}
+            variant={item.status === 'active' ? 'active' : 'inactive'}
+          />
         </View>
       </Card>
     </TouchableOpacity>
   );
 
   const renderExercise = ({ item }: { item: any }) => (
-    <TouchableOpacity onLongPress={() => handleDeleteExercise(item.id)}>
+    <TouchableOpacity onPress={() => openEditExercise(item)} activeOpacity={0.8}>
       <Card style={styles.card}>
         <View style={styles.exerciseRow}>
           {item.image_url ? (
@@ -267,12 +359,27 @@ export default function WorkoutsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{item.name}</Text>
             <View style={styles.tagsRow}>
-              {item.muscle_group && <View style={styles.tag}><Text style={styles.tagText}>{item.muscle_group}</Text></View>}
-              {item.category     && <View style={styles.tag}><Text style={styles.tagText}>{item.category}</Text></View>}
-              {item.equipment    && <View style={styles.tag}><Text style={styles.tagText}>{item.equipment}</Text></View>}
+              {item.muscle_group && (
+                <View style={styles.tag}><Text style={styles.tagText}>{item.muscle_group}</Text></View>
+              )}
+              {item.category && (
+                <View style={styles.tag}><Text style={styles.tagText}>{item.category}</Text></View>
+              )}
+              {item.equipment && (
+                <View style={styles.tag}><Text style={styles.tagText}>{item.equipment}</Text></View>
+              )}
             </View>
-            {item.cues && <Text style={styles.cues} numberOfLines={2}>{item.cues}</Text>}
+            {item.cues ? (
+              <Text style={styles.cues} numberOfLines={2}>{item.cues}</Text>
+            ) : null}
+            <Text style={styles.tapToEditHint}>Tap to edit · Long press to delete</Text>
           </View>
+          <TouchableOpacity
+            onPress={() => handleDeleteExercise(item.id, item.name)}
+            style={{ padding: spacing.xs }}
+          >
+            <Ionicons name="trash-outline" size={18} color={colors.gray300} />
+          </TouchableOpacity>
         </View>
       </Card>
     </TouchableOpacity>
@@ -299,7 +406,9 @@ export default function WorkoutsScreen() {
             onPress={() => setActiveTab(t)}
           >
             <Text style={[styles.tabText, activeTab === t && styles.tabTextActive]}>
-              {t === 'plans' ? `Plans (${plans.length})` : `Exercises (${exercises.length})`}
+              {t === 'plans'
+                ? `Routines (${plans.length})`
+                : `Exercises (${exercises.length})`}
             </Text>
           </TouchableOpacity>
         ))}
@@ -315,8 +424,8 @@ export default function WorkoutsScreen() {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Ionicons name="barbell-outline" size={48} color={colors.gray300} />
-              <Text style={styles.emptyTitle}>No workout plans yet</Text>
-              <Text style={styles.emptyText}>Tap + to create your first plan.</Text>
+              <Text style={styles.emptyTitle}>No routines yet</Text>
+              <Text style={styles.emptyText}>Tap + to create your first routine (e.g. "Chest Day").</Text>
             </View>
           }
         />
@@ -331,19 +440,19 @@ export default function WorkoutsScreen() {
             <View style={styles.empty}>
               <Ionicons name="fitness-outline" size={48} color={colors.gray300} />
               <Text style={styles.emptyTitle}>No exercises yet</Text>
-              <Text style={styles.emptyText}>Tap + to add your first exercise.</Text>
+              <Text style={styles.emptyText}>Tap + to add exercises to your library.</Text>
             </View>
           }
         />
       )}
 
-      {/* ── Add Exercise Modal ── */}
+      {/* ── Create Exercise Modal ── */}
       <Modal visible={exerciseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Exercise</Text>
-              <TouchableOpacity onPress={() => { setExerciseModal(false); resetExerciseForm(); }}>
+              <TouchableOpacity onPress={() => { setExerciseModal(false); setExerciseForm(BLANK_EX); setLocalImageUri(null); }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
@@ -357,32 +466,18 @@ export default function WorkoutsScreen() {
                 onChangeText={(v) => setExerciseForm((f) => ({ ...f, name: v }))}
               />
 
-              {/* Image upload */}
               <Text style={styles.fieldLabel}>Exercise Image (optional)</Text>
-              <TouchableOpacity style={styles.imageUploadBtn} onPress={pickExerciseImage} disabled={uploadingImage}>
-                {uploadingImage ? (
-                  <ActivityIndicator color={colors.gray600} />
-                ) : localImageUri || exerciseForm.image_url ? (
-                  <Image
-                    source={{ uri: localImageUri || exerciseForm.image_url }}
-                    style={styles.imagePreview}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <>
-                    <Ionicons name="camera-outline" size={28} color={colors.gray400} />
-                    <Text style={styles.imageUploadTxt}>Tap to upload image</Text>
-                  </>
+              <ImageUploadField
+                localUri={localImageUri}
+                imageUrl={exerciseForm.image_url}
+                uploading={uploadingImage}
+                onPick={() => pickImage(
+                  (uri) => setLocalImageUri(uri),
+                  (url) => setExerciseForm((f) => ({ ...f, image_url: url })),
+                  setUploadingImage,
                 )}
-              </TouchableOpacity>
-              {(localImageUri || exerciseForm.image_url) && !uploadingImage && (
-                <TouchableOpacity
-                  style={styles.removeImageBtn}
-                  onPress={() => { setLocalImageUri(null); setExerciseForm((f) => ({ ...f, image_url: '' })); }}
-                >
-                  <Text style={styles.removeImageTxt}>Remove image</Text>
-                </TouchableOpacity>
-              )}
+                onRemove={() => { setLocalImageUri(null); setExerciseForm((f) => ({ ...f, image_url: '' })); }}
+              />
 
               <Text style={styles.fieldLabel}>Muscle Group</Text>
               <ChipPicker
@@ -408,7 +503,7 @@ export default function WorkoutsScreen() {
               <Text style={styles.fieldLabel}>Coaching Cues</Text>
               <TextInput
                 style={[styles.textInput, { minHeight: 80, textAlignVertical: 'top' }]}
-                placeholder="e.g. Retract shoulder blades, drive feet into floor..."
+                placeholder="e.g. Retract shoulder blades..."
                 placeholderTextColor={colors.gray400}
                 value={exerciseForm.cues}
                 onChangeText={(v) => setExerciseForm((f) => ({ ...f, cues: v }))}
@@ -429,24 +524,116 @@ export default function WorkoutsScreen() {
         </View>
       </Modal>
 
-      {/* ── Add Plan Modal ── */}
+      {/* ── Edit Exercise Modal ── */}
+      <Modal visible={editExModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Exercise</Text>
+              <TouchableOpacity onPress={() => { setEditExModal(false); setEditingEx(null); setEditLocalImg(null); }}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+              <Text style={styles.fieldLabel}>Name *</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Exercise name"
+                placeholderTextColor={colors.gray400}
+                value={editExForm.name}
+                onChangeText={(v) => setEditExForm((f) => ({ ...f, name: v }))}
+              />
+
+              <Text style={styles.fieldLabel}>Exercise Image</Text>
+              <ImageUploadField
+                localUri={editLocalImg}
+                imageUrl={editExForm.image_url}
+                uploading={editUploadingImg}
+                onPick={() => pickImage(
+                  (uri) => setEditLocalImg(uri),
+                  (url) => setEditExForm((f) => ({ ...f, image_url: url })),
+                  setEditUploadingImg,
+                )}
+                onRemove={() => { setEditLocalImg(null); setEditExForm((f) => ({ ...f, image_url: '' })); }}
+              />
+
+              <Text style={styles.fieldLabel}>Muscle Group</Text>
+              <ChipPicker
+                options={MUSCLE_GROUPS}
+                selected={editExForm.muscle_group}
+                onSelect={(v) => setEditExForm((f) => ({ ...f, muscle_group: v }))}
+              />
+
+              <Text style={styles.fieldLabel}>Category</Text>
+              <ChipPicker
+                options={CATEGORIES}
+                selected={editExForm.category}
+                onSelect={(v) => setEditExForm((f) => ({ ...f, category: v }))}
+              />
+
+              <Text style={styles.fieldLabel}>Equipment</Text>
+              <ChipPicker
+                options={EQUIPMENT}
+                selected={editExForm.equipment}
+                onSelect={(v) => setEditExForm((f) => ({ ...f, equipment: v }))}
+              />
+
+              <Text style={styles.fieldLabel}>Coaching Cues</Text>
+              <TextInput
+                style={[styles.textInput, { minHeight: 80, textAlignVertical: 'top' }]}
+                placeholder="e.g. Retract shoulder blades..."
+                placeholderTextColor={colors.gray400}
+                value={editExForm.cues}
+                onChangeText={(v) => setEditExForm((f) => ({ ...f, cues: v }))}
+                multiline
+              />
+
+              {/* Delete button */}
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => {
+                  if (!editingEx) return;
+                  setEditExModal(false);
+                  setTimeout(() => handleDeleteExercise(editingEx.id, editingEx.name), 300);
+                }}
+              >
+                <Ionicons name="trash-outline" size={16} color={colors.red700} />
+                <Text style={styles.deleteBtnTxt}>Delete Exercise</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.saveButton}
+                onPress={handleSaveExercise}
+                disabled={savingEditEx || editUploadingImg}
+              >
+                {savingEditEx
+                  ? <ActivityIndicator color={colors.white} />
+                  : <Text style={styles.saveButtonText}>Save Changes</Text>}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Create Routine Modal ── */}
       <Modal visible={planModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>New Workout Plan</Text>
+              <Text style={styles.modalTitle}>New Routine</Text>
               <TouchableOpacity onPress={() => { setPlanModal(false); setPlanForm({ title: '', goal_focus: '', client_id: '' }); }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-              <Text style={styles.fieldLabel}>Plan Title *</Text>
+              <Text style={styles.fieldLabel}>Routine Name *</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="e.g. 12 Week Strength Program"
+                placeholder="e.g. Chest Day, Push Day, Leg Day"
                 placeholderTextColor={colors.gray400}
                 value={planForm.title}
                 onChangeText={(v) => setPlanForm((f) => ({ ...f, title: v }))}
+                autoFocus
               />
 
               <Text style={styles.fieldLabel}>Goal / Focus</Text>
@@ -484,7 +671,7 @@ export default function WorkoutsScreen() {
               <View style={styles.infoBanner}>
                 <Ionicons name="information-circle-outline" size={16} color={colors.gray500} />
                 <Text style={styles.infoText}>
-                  A plan is created with Week 1, Day 1. You'll be taken straight to the editor to add exercises.
+                  After creating, you'll be taken to the routine editor to add exercises.
                 </Text>
               </View>
 
@@ -495,7 +682,7 @@ export default function WorkoutsScreen() {
               >
                 {savingPlan
                   ? <ActivityIndicator color={colors.white} />
-                  : <Text style={styles.saveButtonText}>Create Plan & Edit →</Text>}
+                  : <Text style={styles.saveButtonText}>Create Routine & Edit →</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -530,8 +717,9 @@ const styles = StyleSheet.create({
   cardRow:    { flexDirection: 'row', alignItems: 'flex-start' },
   cardTitle:  { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
   cardSub:    { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  cardClient: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
-  cardMeta:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.sm },
+  cardClient: { fontSize: fontSize.xs, color: colors.gray500, marginTop: spacing.xs },
+  cardMeta:   { fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.sm },
+  tapToEditHint: { fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.xs },
   exerciseRow:{ flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
   exerciseThumb: { width: 64, height: 64, borderRadius: borderRadius.sm },
   exerciseThumbPlaceholder: {
@@ -547,9 +735,8 @@ const styles = StyleSheet.create({
   cues:    { fontSize: fontSize.sm, color: colors.gray400, marginTop: spacing.sm },
   empty:      { paddingVertical: spacing.xxxl * 2, alignItems: 'center', gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
-  emptyText:  { fontSize: fontSize.sm, color: colors.gray400 },
+  emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 
-  // Image upload
   imageUploadBtn: {
     height: 120, borderWidth: 1.5, borderColor: colors.gray200, borderStyle: 'dashed',
     borderRadius: borderRadius.sm, alignItems: 'center', justifyContent: 'center',
@@ -560,7 +747,13 @@ const styles = StyleSheet.create({
   removeImageBtn:  { marginTop: spacing.sm, alignSelf: 'flex-end' },
   removeImageTxt:  { fontSize: fontSize.sm, color: colors.red500, fontWeight: '500' },
 
-  // Modal
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingVertical: spacing.md,
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm, marginTop: spacing.lg,
+  },
+  deleteBtnTxt: { fontSize: fontSize.sm, fontWeight: '600', color: colors.red700 },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl,
@@ -577,7 +770,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.sm, color: colors.black,
   },
-  chipScroll:    { marginBottom: spacing.xs },
+  chipScroll: { marginBottom: spacing.xs },
   chip: {
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full,
     borderWidth: 1, borderColor: colors.gray200, marginRight: spacing.sm, marginBottom: spacing.sm,

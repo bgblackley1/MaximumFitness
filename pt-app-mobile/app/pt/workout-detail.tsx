@@ -1,5 +1,5 @@
 // pt-app-mobile/app/pt/workout-detail.tsx
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Modal, TextInput, Alert, ActivityIndicator, RefreshControl, Image,
@@ -15,23 +15,33 @@ export default function WorkoutDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
 
-  const [plan, setPlan]           = useState<any>(null);
-  const [exercises, setExercises] = useState<any[]>([]);
-  const [clients, setClients]     = useState<any[]>([]);
-  const [loading, setLoading]     = useState(true);
+  const [plan, setPlan]             = useState<any>(null);
+  const [exercises, setExercises]   = useState<any[]>([]);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving]       = useState(false);
+  const [saving, setSaving]         = useState(false);
 
-  // Add exercise modal
-  const [addExModal, setAddExModal] = useState(false);
-  const [targetDayId, setTargetDayId] = useState<string | null>(null);
-  const [exSearch, setExSearch]     = useState('');
-  const [selectedEx, setSelectedEx] = useState<any | null>(null);
-  const [exParams, setExParams]     = useState({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
+  // The exercises currently in the plan (from weeks[0].days[0].exercises)
+  const [planExercises, setPlanExercises] = useState<any[]>([]);
+  // The day ID we're editing (always the first day)
+  const [dayId, setDayId] = useState<string | null>(null);
 
-  // Settings modal
-  const [settingsModal, setSettingsModal] = useState(false);
-  const [planSettings, setPlanSettings]   = useState({ title: '', goal_focus: '', client_id: '', visibility: 'draft' });
+  // ── Add exercise to plan modal ──
+  const [addModal, setAddModal]       = useState(false);
+  const [exSearch, setExSearch]       = useState('');
+  const [selectedEx, setSelectedEx]   = useState<any | null>(null);
+  const [exParams, setExParams]       = useState({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
+
+  // ── Edit exercise in plan modal (edit sets/reps for this plan entry) ──
+  const [editPlanExModal, setEditPlanExModal] = useState(false);
+  const [editingPlanEx, setEditingPlanEx]     = useState<any | null>(null);
+  const [editPlanExParams, setEditPlanExParams] = useState({ sets: '', reps: '', rest_seconds: '', notes: '' });
+
+  // ── Plan settings modal ──
+  const [settingsModal, setSettingsModal]   = useState(false);
+  const [planSettings, setPlanSettings]     = useState({ title: '', goal_focus: '', visibility: 'draft' });
+  const [allClients, setAllClients]         = useState<any[]>([]);
+  const [assignedClientId, setAssignedClientId] = useState<string>('');
 
   useEffect(() => {
     if (id) loadAll();
@@ -45,19 +55,29 @@ export default function WorkoutDetailScreen() {
         API.get('/clients'),
       ]);
       if (pR.status === 'fulfilled') {
-        setPlan(pR.value.data);
         const p = pR.value.data;
+        setPlan(p);
         setPlanSettings({
-          title:      p.title,
+          title:      p.title ?? '',
           goal_focus: p.goal_focus ?? '',
-          client_id:  p.client_id ?? '',
           visibility: p.visibility ?? 'draft',
         });
+        setAssignedClientId(p.client_id ?? '');
+
+        // Extract exercises from the first day (Week 1, Day 1)
+        const firstDay = p.weeks?.[0]?.days?.[0];
+        if (firstDay) {
+          setDayId(firstDay.id);
+          setPlanExercises(firstDay.exercises ?? []);
+        }
       }
       if (eR.status === 'fulfilled') setExercises(eR.value.data);
-      if (cR.status === 'fulfilled') setClients(cR.value.data);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+      if (cR.status === 'fulfilled') setAllClients(cR.value.data);
+    } catch (err) {
+      console.error('loadAll:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onRefresh = async () => {
@@ -66,30 +86,37 @@ export default function WorkoutDetailScreen() {
     setRefreshing(false);
   };
 
-  // ── Rebuild and save entire plan ──────────────────────────────────────────
-  const savePlan = async (updatedPlan: any) => {
+  // ── Save entire plan with updated exercises ────────────────────────────────
+  const savePlanWithExercises = async (updatedExercises: any[], updatedSettings?: typeof planSettings, updatedClientId?: string) => {
+    if (!plan) return;
     setSaving(true);
+    const settings = updatedSettings ?? planSettings;
+    const clientId = updatedClientId !== undefined ? updatedClientId : assignedClientId;
     try {
       await API.put(`/workout-plans/${id}`, {
-        title:      updatedPlan.title,
-        client_id:  updatedPlan.client_id || null,
-        goal_focus: updatedPlan.goal_focus || null,
-        visibility: updatedPlan.visibility,
-        weeks: updatedPlan.weeks.map((w: any) => ({
-          week_number: w.week_number,
-          days: w.days.map((d: any) => ({
-            day_label: d.day_label,
-            day_order: d.day_order,
-            exercises: d.exercises.map((e: any) => ({
-              exercise_id:  e.exercise_id ?? e.exercise?.id,
-              order:        e.order,
-              sets:         e.sets,
-              reps:         e.reps,
-              rest_seconds: e.rest_seconds,
-              notes:        e.notes || null,
-            })),
-          })),
-        })),
+        title:      settings.title || plan.title,
+        client_id:  clientId || null,
+        goal_focus: settings.goal_focus || null,
+        visibility: settings.visibility,
+        weeks: [
+          {
+            week_number: 1,
+            days: [
+              {
+                day_label: 'Workout',
+                day_order: 1,
+                exercises: updatedExercises.map((e: any, idx: number) => ({
+                  exercise_id:  e.exercise_id ?? e.exercise?.id,
+                  order:        idx + 1,
+                  sets:         e.sets,
+                  reps:         e.reps,
+                  rest_seconds: e.rest_seconds,
+                  notes:        e.notes || null,
+                })),
+              },
+            ],
+          },
+        ],
       });
       await loadAll();
     } catch (err: any) {
@@ -99,137 +126,95 @@ export default function WorkoutDetailScreen() {
     }
   };
 
-  // ── Add week ──────────────────────────────────────────────────────────────
-  const addWeek = async () => {
-    if (!plan) return;
-    const nextWeek = (plan.weeks?.length ?? 0) + 1;
-    const updated  = {
-      ...plan,
-      ...planSettings,
-      weeks: [
-        ...(plan.weeks ?? []),
-        {
-          week_number: nextWeek,
-          days: [{ day_label: 'Day 1', day_order: 1, exercises: [] }],
-        },
-      ],
+  // ── Add exercise ──────────────────────────────────────────────────────────
+  const confirmAddExercise = async () => {
+    if (!selectedEx) return;
+    const newEntry = {
+      exercise_id:  selectedEx.id,
+      order:        planExercises.length + 1,
+      sets:         parseInt(exParams.sets) || 3,
+      reps:         exParams.reps || '8-12',
+      rest_seconds: parseInt(exParams.rest_seconds) || 60,
+      notes:        exParams.notes || null,
+      exercise:     selectedEx,
     };
-    await savePlan(updated);
-  };
-
-  // ── Add day to week ───────────────────────────────────────────────────────
-  const addDay = async (weekIndex: number) => {
-    if (!plan) return;
-    const weeks    = [...(plan.weeks ?? [])];
-    const week     = { ...weeks[weekIndex] };
-    const dayOrder = (week.days?.length ?? 0) + 1;
-    week.days = [
-      ...(week.days ?? []),
-      { day_label: `Day ${dayOrder}`, day_order: dayOrder, exercises: [] },
-    ];
-    weeks[weekIndex] = week;
-    await savePlan({ ...plan, ...planSettings, weeks });
-  };
-
-  // ── Remove day ────────────────────────────────────────────────────────────
-  const removeDay = async (weekIndex: number, dayIndex: number) => {
-    if (!plan) return;
-    Alert.alert('Remove Day', 'Remove this day and all its exercises?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove', style: 'destructive',
-        onPress: async () => {
-          const weeks = [...(plan.weeks ?? [])];
-          weeks[weekIndex] = {
-            ...weeks[weekIndex],
-            days: weeks[weekIndex].days.filter((_: any, i: number) => i !== dayIndex),
-          };
-          await savePlan({ ...plan, ...planSettings, weeks });
-        },
-      },
-    ]);
-  };
-
-  // ── Remove week ───────────────────────────────────────────────────────────
-  const removeWeek = async (weekIndex: number) => {
-    if (!plan) return;
-    Alert.alert('Remove Week', 'Remove this week and all its days?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove', style: 'destructive',
-        onPress: async () => {
-          const weeks = (plan.weeks ?? []).filter((_: any, i: number) => i !== weekIndex);
-          await savePlan({ ...plan, ...planSettings, weeks });
-        },
-      },
-    ]);
-  };
-
-  // ── Open add exercise modal ───────────────────────────────────────────────
-  const openAddExercise = (dayId: string) => {
-    setTargetDayId(dayId);
+    const updated = [...planExercises, newEntry];
+    setPlanExercises(updated);
+    setAddModal(false);
     setSelectedEx(null);
     setExSearch('');
     setExParams({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
-    setAddExModal(true);
+    await savePlanWithExercises(updated);
   };
 
-  // ── Confirm add exercise ──────────────────────────────────────────────────
-  const confirmAddExercise = async () => {
-    if (!selectedEx || !plan || !targetDayId) return;
-    const weeks = (plan.weeks ?? []).map((w: any) => ({
-      ...w,
-      days: w.days.map((d: any) => {
-        if (d.id !== targetDayId) return d;
-        const order = (d.exercises?.length ?? 0) + 1;
+  // ── Remove exercise ───────────────────────────────────────────────────────
+  const removeExercise = (idx: number) => {
+    Alert.alert(
+      'Remove Exercise',
+      `Remove "${planExercises[idx]?.exercise?.name}" from this routine?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove', style: 'destructive',
+          onPress: async () => {
+            const updated = planExercises.filter((_, i) => i !== idx);
+            setPlanExercises(updated);
+            await savePlanWithExercises(updated);
+          },
+        },
+      ]
+    );
+  };
+
+  // ── Open edit-in-plan modal ───────────────────────────────────────────────
+  const openEditPlanEx = (ex: any) => {
+    setEditingPlanEx(ex);
+    setEditPlanExParams({
+      sets:         String(ex.sets),
+      reps:         ex.reps,
+      rest_seconds: String(ex.rest_seconds),
+      notes:        ex.notes ?? '',
+    });
+    setEditPlanExModal(true);
+  };
+
+  // ── Save edit-in-plan ─────────────────────────────────────────────────────
+  const confirmEditPlanEx = async () => {
+    if (!editingPlanEx) return;
+    const updated = planExercises.map((e) => {
+      const key = e.exercise_id ?? e.exercise?.id;
+      const eKey = editingPlanEx.exercise_id ?? editingPlanEx.exercise?.id;
+      if (key === eKey && e.order === editingPlanEx.order) {
         return {
-          ...d,
-          exercises: [
-            ...(d.exercises ?? []),
-            {
-              exercise_id:  selectedEx.id,
-              order,
-              sets:         parseInt(exParams.sets) || 3,
-              reps:         exParams.reps || '8-12',
-              rest_seconds: parseInt(exParams.rest_seconds) || 60,
-              notes:        exParams.notes || null,
-              exercise:     selectedEx, // for local display
-            },
-          ],
+          ...e,
+          sets:         parseInt(editPlanExParams.sets) || e.sets,
+          reps:         editPlanExParams.reps || e.reps,
+          rest_seconds: parseInt(editPlanExParams.rest_seconds) || e.rest_seconds,
+          notes:        editPlanExParams.notes || null,
         };
-      }),
-    }));
-    setAddExModal(false);
-    await savePlan({ ...plan, ...planSettings, weeks });
+      }
+      return e;
+    });
+    setPlanExercises(updated);
+    setEditPlanExModal(false);
+    setEditingPlanEx(null);
+    await savePlanWithExercises(updated);
   };
 
-  // ── Remove exercise from day ──────────────────────────────────────────────
-  const removeExercise = async (dayId: string, exIndex: number) => {
-    if (!plan) return;
-    const weeks = (plan.weeks ?? []).map((w: any) => ({
-      ...w,
-      days: w.days.map((d: any) => {
-        if (d.id !== dayId) return d;
-        return {
-          ...d,
-          exercises: d.exercises.filter((_: any, i: number) => i !== exIndex),
-        };
-      }),
-    }));
-    await savePlan({ ...plan, ...planSettings, weeks });
-  };
-
-  // ── Save settings ─────────────────────────────────────────────────────────
+  // ── Save settings ──────────────────────────────────────────────────────────
   const saveSettings = async () => {
-    if (!plan) return;
     setSettingsModal(false);
-    await savePlan({ ...plan, ...planSettings });
+    await savePlanWithExercises(planExercises, planSettings, assignedClientId);
   };
 
   const filteredExercises = exercises.filter((e) =>
     e.name.toLowerCase().includes(exSearch.toLowerCase()) ||
     (e.muscle_group ?? '').toLowerCase().includes(exSearch.toLowerCase())
   );
+
+  const visibilityLabel = planSettings.visibility === 'client_visible'
+    ? '✓ Visible to client'
+    : '⬜ Draft (hidden)';
 
   if (loading) {
     return (
@@ -242,19 +227,14 @@ export default function WorkoutDetailScreen() {
   if (!plan) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={22} color={colors.black} />
-          </TouchableOpacity>
-        </View>
-        <Text style={{ textAlign: 'center', marginTop: 40, color: colors.gray500 }}>
-          Plan not found.
-        </Text>
+        <TouchableOpacity style={styles.backRow} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={22} color={colors.black} />
+          <Text style={styles.backTxt}>Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.emptyText}>Plan not found.</Text>
       </SafeAreaView>
     );
   }
-
-  const visibilityLabel = planSettings.visibility === 'client_visible' ? 'Visible to Client' : 'Draft';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -265,193 +245,213 @@ export default function WorkoutDetailScreen() {
         </TouchableOpacity>
         <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Text style={styles.headerTitle} numberOfLines={1}>{plan.title}</Text>
-          <Text style={styles.headerSub}>{visibilityLabel}</Text>
+          <Text style={styles.headerSub}>
+            {plan.goal_focus ? `${plan.goal_focus}  ·  ` : ''}{visibilityLabel}
+          </Text>
         </View>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => setSettingsModal(true)}>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setSettingsModal(true)}>
           <Ionicons name="settings-outline" size={20} color={colors.black} />
         </TouchableOpacity>
-        {saving && <ActivityIndicator color={colors.black} style={{ marginLeft: spacing.sm }} />}
+        {saving && (
+          <ActivityIndicator
+            color={colors.black}
+            style={{ marginLeft: spacing.sm }}
+            size="small"
+          />
+        )}
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Weeks */}
-        {(plan.weeks ?? []).map((week: any, wIdx: number) => (
-          <View key={week.id ?? wIdx} style={styles.weekContainer}>
-            <View style={styles.weekHeader}>
-              <Text style={styles.weekLabel}>WEEK {week.week_number}</Text>
-              <View style={styles.weekActions}>
-                <TouchableOpacity
-                  style={styles.weekActionBtn}
-                  onPress={() => addDay(wIdx)}
-                >
-                  <Ionicons name="add" size={16} color={colors.black} />
-                  <Text style={styles.weekActionTxt}>Add Day</Text>
-                </TouchableOpacity>
-                {(plan.weeks?.length ?? 0) > 1 && (
-                  <TouchableOpacity onPress={() => removeWeek(wIdx)}>
-                    <Ionicons name="trash-outline" size={16} color={colors.red500} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
+        {/* Exercises list */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>
+            Exercises ({planExercises.length})
+          </Text>
+          <TouchableOpacity
+            style={styles.addExBtn}
+            onPress={() => {
+              setSelectedEx(null);
+              setExSearch('');
+              setExParams({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
+              setAddModal(true);
+            }}
+          >
+            <Ionicons name="add" size={16} color={colors.white} />
+            <Text style={styles.addExBtnTxt}>Add Exercise</Text>
+          </TouchableOpacity>
+        </View>
 
-            {/* Days */}
-            {(week.days ?? []).map((day: any, dIdx: number) => (
-              <Card key={day.id ?? dIdx} style={styles.dayCard}>
-                <View style={styles.dayHeader}>
-                  <Text style={styles.dayLabel}>{day.day_label}</Text>
-                  <View style={styles.dayActions}>
-                    <TouchableOpacity
-                      style={styles.addExBtn}
-                      onPress={() => openAddExercise(day.id)}
-                    >
-                      <Ionicons name="add" size={14} color={colors.white} />
-                      <Text style={styles.addExBtnTxt}>Exercise</Text>
-                    </TouchableOpacity>
-                    {(week.days?.length ?? 0) > 1 && (
-                      <TouchableOpacity
-                        onPress={() => removeDay(wIdx, dIdx)}
-                        style={{ marginLeft: spacing.sm }}
-                      >
-                        <Ionicons name="trash-outline" size={15} color={colors.red500} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
+        {planExercises.length === 0 ? (
+          <TouchableOpacity
+            style={styles.emptyExCard}
+            onPress={() => setAddModal(true)}
+          >
+            <Ionicons name="add-circle-outline" size={32} color={colors.gray300} />
+            <Text style={styles.emptyExTitle}>No exercises yet</Text>
+            <Text style={styles.emptyExText}>Tap to add your first exercise to this routine.</Text>
+          </TouchableOpacity>
+        ) : (
+          planExercises.map((ex: any, idx: number) => (
+            <Card key={`${ex.exercise_id ?? ex.exercise?.id}-${idx}`} style={styles.exCard}>
+              <View style={styles.exRow}>
+                {/* Order number */}
+                <View style={styles.exNum}>
+                  <Text style={styles.exNumTxt}>{idx + 1}</Text>
                 </View>
 
-                {/* Exercises */}
-                {(day.exercises ?? []).length === 0 ? (
-                  <TouchableOpacity
-                    style={styles.emptyDayBtn}
-                    onPress={() => openAddExercise(day.id)}
-                  >
-                    <Ionicons name="add-circle-outline" size={20} color={colors.gray400} />
-                    <Text style={styles.emptyDayTxt}>Tap to add exercises</Text>
-                  </TouchableOpacity>
+                {/* Exercise image thumbnail */}
+                {ex.exercise?.image_url ? (
+                  <Image source={{ uri: ex.exercise.image_url }} style={styles.exThumb} />
                 ) : (
-                  (day.exercises ?? []).map((ex: any, eIdx: number) => (
-                    <View key={ex.id ?? eIdx} style={styles.exRow}>
-                      <View style={styles.exNum}>
-                        <Text style={styles.exNumTxt}>{eIdx + 1}</Text>
-                      </View>
-                      {ex.exercise?.image_url ? (
-                        <Image source={{ uri: ex.exercise.image_url }} style={styles.exThumb} />
-                      ) : null}
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.exName}>
-                          {ex.exercise?.name ?? 'Exercise'}
-                        </Text>
-                        <Text style={styles.exMeta}>
-                          {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
-                        </Text>
-                        {ex.exercise?.muscle_group ? (
-                          <View style={styles.exTag}>
-                            <Text style={styles.exTagTxt}>{ex.exercise.muscle_group}</Text>
-                          </View>
-                        ) : null}
-                        {ex.notes ? (
-                          <Text style={styles.exNotes}>{ex.notes}</Text>
-                        ) : null}
-                      </View>
-                      <TouchableOpacity
-                        onPress={() => Alert.alert('Remove?', `Remove ${ex.exercise?.name}?`, [
-                          { text: 'Cancel', style: 'cancel' },
-                          { text: 'Remove', style: 'destructive', onPress: () => removeExercise(day.id, eIdx) },
-                        ])}
-                      >
-                        <Ionicons name="close-circle" size={20} color={colors.gray300} />
-                      </TouchableOpacity>
-                    </View>
-                  ))
+                  <View style={styles.exThumbEmpty}>
+                    <Ionicons name="barbell-outline" size={18} color={colors.gray400} />
+                  </View>
                 )}
-              </Card>
-            ))}
-          </View>
-        ))}
 
-        {/* Add week button */}
-        <TouchableOpacity style={styles.addWeekBtn} onPress={addWeek}>
-          <Ionicons name="add" size={20} color={colors.gray600} />
-          <Text style={styles.addWeekTxt}>Add Week {(plan.weeks?.length ?? 0) + 1}</Text>
-        </TouchableOpacity>
+                {/* Exercise info */}
+                <TouchableOpacity style={{ flex: 1 }} onPress={() => openEditPlanEx(ex)}>
+                  <Text style={styles.exName}>{ex.exercise?.name ?? 'Exercise'}</Text>
+                  <Text style={styles.exMeta}>
+                    {ex.sets} sets × {ex.reps} reps
+                    {ex.rest_seconds ? `  ·  ${ex.rest_seconds}s rest` : ''}
+                  </Text>
+                  {ex.exercise?.muscle_group ? (
+                    <View style={styles.tag}>
+                      <Text style={styles.tagTxt}>{ex.exercise.muscle_group}</Text>
+                    </View>
+                  ) : null}
+                  {ex.notes ? (
+                    <Text style={styles.exNotes}>{ex.notes}</Text>
+                  ) : null}
+                  <Text style={styles.tapToEdit}>Tap to edit sets/reps →</Text>
+                </TouchableOpacity>
+
+                {/* Remove button */}
+                <TouchableOpacity
+                  onPress={() => removeExercise(idx)}
+                  style={styles.removeBtn}
+                >
+                  <Ionicons name="close-circle" size={22} color={colors.gray300} />
+                </TouchableOpacity>
+              </View>
+            </Card>
+          ))
+        )}
+
+        {/* Coaching cues section */}
+        {planExercises.some((e) => e.exercise?.cues) && (
+          <View style={styles.cuesSection}>
+            <Text style={styles.cuesTitle}>Coaching Cues</Text>
+            {planExercises
+              .filter((e) => e.exercise?.cues)
+              .map((ex, idx) => (
+                <Card key={idx} style={styles.cueCard}>
+                  <Text style={styles.cueName}>{ex.exercise.name}</Text>
+                  <Text style={styles.cueText}>{ex.exercise.cues}</Text>
+                </Card>
+              ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* ── Add Exercise Modal ── */}
-      <Modal visible={addExModal} transparent animationType="slide">
+      <Modal visible={addModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Exercise</Text>
-              <TouchableOpacity onPress={() => setAddExModal(false)}>
+              <TouchableOpacity onPress={() => { setAddModal(false); setSelectedEx(null); }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
 
-            {/* Search */}
-            <View style={styles.searchBox}>
-              <Ionicons name="search-outline" size={16} color={colors.gray400} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search exercises..."
-                placeholderTextColor={colors.gray400}
-                value={exSearch}
-                onChangeText={setExSearch}
-              />
-            </View>
-
             {!selectedEx ? (
-              // Exercise list
-              <ScrollView style={styles.exList} contentContainerStyle={{ paddingBottom: spacing.xl }}>
-                {filteredExercises.map((ex) => (
-                  <TouchableOpacity
-                    key={ex.id}
-                    style={styles.exPickRow}
-                    onPress={() => setSelectedEx(ex)}
-                  >
-                    {ex.image_url ? (
-                      <Image source={{ uri: ex.image_url }} style={styles.exPickThumb} />
-                    ) : (
-                      <View style={styles.exPickThumbEmpty}>
-                        <Ionicons name="barbell-outline" size={18} color={colors.gray400} />
-                      </View>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.exPickName}>{ex.name}</Text>
-                      <Text style={styles.exPickMeta}>
-                        {[ex.muscle_group, ex.equipment].filter(Boolean).join(' · ')}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={colors.gray300} />
-                  </TouchableOpacity>
-                ))}
-                {filteredExercises.length === 0 && (
-                  <Text style={styles.noResults}>No exercises match "{exSearch}"</Text>
-                )}
-              </ScrollView>
+              <>
+                {/* Search bar */}
+                <View style={styles.searchRow}>
+                  <Ionicons name="search-outline" size={16} color={colors.gray400} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search exercises..."
+                    placeholderTextColor={colors.gray400}
+                    value={exSearch}
+                    onChangeText={setExSearch}
+                    autoFocus
+                  />
+                  {exSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setExSearch('')}>
+                      <Ionicons name="close-circle" size={16} color={colors.gray400} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Exercise list */}
+                <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+                  {filteredExercises.length === 0 ? (
+                    <Text style={styles.noResultsTxt}>No exercises match "{exSearch}"</Text>
+                  ) : (
+                    filteredExercises.map((ex) => (
+                      <TouchableOpacity
+                        key={ex.id}
+                        style={styles.exPickRow}
+                        onPress={() => setSelectedEx(ex)}
+                      >
+                        {ex.image_url ? (
+                          <Image source={{ uri: ex.image_url }} style={styles.exPickThumb} />
+                        ) : (
+                          <View style={styles.exPickThumbEmpty}>
+                            <Ionicons name="barbell-outline" size={18} color={colors.gray400} />
+                          </View>
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.exPickName}>{ex.name}</Text>
+                          <Text style={styles.exPickMeta}>
+                            {[ex.muscle_group, ex.equipment].filter(Boolean).join(' · ')}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={colors.gray300} />
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </ScrollView>
+              </>
             ) : (
-              // Set params
-              <ScrollView style={styles.exList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+              /* Exercise params screen */
+              <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
                 <TouchableOpacity
-                  style={styles.backToList}
+                  style={styles.backToListBtn}
                   onPress={() => setSelectedEx(null)}
                 >
                   <Ionicons name="arrow-back" size={16} color={colors.black} />
                   <Text style={styles.backToListTxt}>Back to list</Text>
                 </TouchableOpacity>
 
-                <View style={styles.selectedExCard}>
+                {/* Selected exercise preview */}
+                <Card style={styles.selectedExCard}>
                   {selectedEx.image_url ? (
-                    <Image source={{ uri: selectedEx.image_url }} style={styles.selectedExImg} />
+                    <Image
+                      source={{ uri: selectedEx.image_url }}
+                      style={styles.selectedExImg}
+                      resizeMode="cover"
+                    />
                   ) : null}
                   <Text style={styles.selectedExName}>{selectedEx.name}</Text>
                   {selectedEx.muscle_group ? (
-                    <Text style={styles.selectedExMeta}>{selectedEx.muscle_group}</Text>
+                    <View style={styles.tag}>
+                      <Text style={styles.tagTxt}>{selectedEx.muscle_group}</Text>
+                    </View>
                   ) : null}
-                </View>
+                  {selectedEx.cues ? (
+                    <Text style={styles.selectedExCues} numberOfLines={3}>
+                      💡 {selectedEx.cues}
+                    </Text>
+                  ) : null}
+                </Card>
 
+                {/* Sets / Reps / Rest */}
                 <View style={styles.paramsGrid}>
                   <View style={styles.paramField}>
                     <Text style={styles.paramLabel}>Sets</Text>
@@ -498,7 +498,7 @@ export default function WorkoutDetailScreen() {
                 />
 
                 <TouchableOpacity style={styles.confirmBtn} onPress={confirmAddExercise}>
-                  <Text style={styles.confirmBtnTxt}>Add to Plan</Text>
+                  <Text style={styles.confirmBtnTxt}>Add to Routine</Text>
                 </TouchableOpacity>
               </ScrollView>
             )}
@@ -506,70 +506,137 @@ export default function WorkoutDetailScreen() {
         </View>
       </Modal>
 
+      {/* ── Edit Plan Exercise Modal (sets/reps) ── */}
+      <Modal visible={editPlanExModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                Edit: {editingPlanEx?.exercise?.name ?? 'Exercise'}
+              </Text>
+              <TouchableOpacity onPress={() => { setEditPlanExModal(false); setEditingPlanEx(null); }}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+              <View style={styles.paramsGrid}>
+                <View style={styles.paramField}>
+                  <Text style={styles.paramLabel}>Sets</Text>
+                  <TextInput
+                    style={styles.paramInput}
+                    value={editPlanExParams.sets}
+                    onChangeText={(v) => setEditPlanExParams((f) => ({ ...f, sets: v }))}
+                    keyboardType="numeric"
+                    placeholderTextColor={colors.gray400}
+                  />
+                </View>
+                <View style={styles.paramField}>
+                  <Text style={styles.paramLabel}>Reps</Text>
+                  <TextInput
+                    style={styles.paramInput}
+                    value={editPlanExParams.reps}
+                    onChangeText={(v) => setEditPlanExParams((f) => ({ ...f, reps: v }))}
+                    placeholderTextColor={colors.gray400}
+                  />
+                </View>
+                <View style={styles.paramField}>
+                  <Text style={styles.paramLabel}>Rest (sec)</Text>
+                  <TextInput
+                    style={styles.paramInput}
+                    value={editPlanExParams.rest_seconds}
+                    onChangeText={(v) => setEditPlanExParams((f) => ({ ...f, rest_seconds: v }))}
+                    keyboardType="numeric"
+                    placeholderTextColor={colors.gray400}
+                  />
+                </View>
+              </View>
+              <Text style={styles.paramLabel}>Notes (optional)</Text>
+              <TextInput
+                style={[styles.paramInput, { minHeight: 60, textAlignVertical: 'top', marginTop: spacing.sm }]}
+                value={editPlanExParams.notes}
+                onChangeText={(v) => setEditPlanExParams((f) => ({ ...f, notes: v }))}
+                placeholder="Coaching notes for this exercise..."
+                placeholderTextColor={colors.gray400}
+                multiline
+              />
+              <TouchableOpacity style={styles.confirmBtn} onPress={confirmEditPlanEx}>
+                <Text style={styles.confirmBtnTxt}>Save Changes</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Plan Settings Modal ── */}
       <Modal visible={settingsModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Plan Settings</Text>
+              <Text style={styles.modalTitle}>Routine Settings</Text>
               <TouchableOpacity onPress={() => setSettingsModal(false)}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.exList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-              <Text style={styles.fieldLabel}>Title</Text>
+            <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+              <Text style={styles.paramLabel}>Routine Name</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.paramInput, { marginBottom: spacing.md }]}
                 value={planSettings.title}
                 onChangeText={(v) => setPlanSettings((f) => ({ ...f, title: v }))}
-                placeholder="Plan title"
+                placeholder="e.g. Push Day, Chest Day, Leg Day"
                 placeholderTextColor={colors.gray400}
               />
 
-              <Text style={styles.fieldLabel}>Goal / Focus</Text>
+              <Text style={styles.paramLabel}>Goal / Focus</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.paramInput, { marginBottom: spacing.md }]}
                 value={planSettings.goal_focus}
                 onChangeText={(v) => setPlanSettings((f) => ({ ...f, goal_focus: v }))}
-                placeholder="e.g. Hypertrophy"
+                placeholder="e.g. Hypertrophy, Strength"
                 placeholderTextColor={colors.gray400}
               />
 
-              <Text style={styles.fieldLabel}>Assign to Client</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <Text style={styles.paramLabel}>Assign to Client</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.md }}>
                 <TouchableOpacity
-                  style={[styles.settingsChip, !planSettings.client_id && styles.settingsChipActive]}
-                  onPress={() => setPlanSettings((f) => ({ ...f, client_id: '' }))}
+                  style={[styles.assignChip, !assignedClientId && styles.assignChipActive]}
+                  onPress={() => setAssignedClientId('')}
                 >
-                  <Text style={[styles.settingsChipTxt, !planSettings.client_id && { color: colors.white }]}>
+                  <Text style={[styles.assignChipTxt, !assignedClientId && { color: colors.white }]}>
                     Unassigned
                   </Text>
                 </TouchableOpacity>
-                {clients.map((c: any) => (
+                {allClients.filter((c: any) => c.status === 'active').map((c: any) => (
                   <TouchableOpacity
                     key={c.id}
-                    style={[styles.settingsChip, planSettings.client_id === c.id && styles.settingsChipActive]}
-                    onPress={() => setPlanSettings((f) => ({ ...f, client_id: c.id }))}
+                    style={[styles.assignChip, assignedClientId === c.id && styles.assignChipActive]}
+                    onPress={() => setAssignedClientId(c.id)}
                   >
-                    <Text style={[styles.settingsChipTxt, planSettings.client_id === c.id && { color: colors.white }]}>
+                    <Text style={[styles.assignChipTxt, assignedClientId === c.id && { color: colors.white }]}>
                       {c.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
 
-              <Text style={styles.fieldLabel}>Visibility</Text>
+              <Text style={styles.paramLabel}>Visibility</Text>
               <View style={styles.visRow}>
                 {[
-                  { val: 'draft', label: 'Draft (hidden from client)' },
-                  { val: 'client_visible', label: 'Visible to Client' },
+                  { val: 'draft',          label: '⬜  Draft — hidden from client' },
+                  { val: 'client_visible', label: '✓  Visible to assigned client' },
                 ].map((opt) => (
                   <TouchableOpacity
                     key={opt.val}
-                    style={[styles.visOption, planSettings.visibility === opt.val && styles.visOptionActive]}
+                    style={[
+                      styles.visOption,
+                      planSettings.visibility === opt.val && styles.visOptionActive,
+                    ]}
                     onPress={() => setPlanSettings((f) => ({ ...f, visibility: opt.val }))}
                   >
-                    <Text style={[styles.visOptionTxt, planSettings.visibility === opt.val && { color: colors.white }]}>
+                    <Text style={[
+                      styles.visOptionTxt,
+                      planSettings.visibility === opt.val && { color: colors.white },
+                    ]}>
                       {opt.label}
                     </Text>
                   </TouchableOpacity>
@@ -597,68 +664,68 @@ const styles = StyleSheet.create({
   backBtn:    { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerTitle:{ fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   headerSub:  { fontSize: fontSize.xs, color: colors.gray400, marginTop: 1 },
-  settingsBtn:{ padding: spacing.sm },
-  scroll:     { paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, paddingBottom: spacing.xxxl * 2 },
+  iconBtn:    { padding: spacing.sm, marginLeft: spacing.xs },
 
-  weekContainer: { marginBottom: spacing.xl },
-  weekHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: spacing.sm,
-  },
-  weekLabel:  { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400, letterSpacing: 1, textTransform: 'uppercase' },
-  weekActions:{ flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  weekActionBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray200,
-    paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: borderRadius.full,
-  },
-  weekActionTxt: { fontSize: fontSize.xs, fontWeight: '500', color: colors.black },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.lg },
+  backTxt: { fontSize: fontSize.md, color: colors.black },
 
-  dayCard:    { marginBottom: spacing.sm },
-  dayHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
-  dayLabel:   { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
-  dayActions: { flexDirection: 'row', alignItems: 'center' },
+  scroll: { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
+
+  sectionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: spacing.lg,
+  },
+  sectionTitle:{ fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   addExBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     backgroundColor: colors.black, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs, borderRadius: borderRadius.full,
+    paddingVertical: spacing.sm, borderRadius: borderRadius.full,
   },
-  addExBtnTxt:{ fontSize: fontSize.xs, color: colors.white, fontWeight: '600' },
+  addExBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
 
-  emptyDayBtn:{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.lg, justifyContent: 'center' },
-  emptyDayTxt:{ fontSize: fontSize.sm, color: colors.gray400 },
-
-  exRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md,
-    paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.gray100,
+  emptyExCard: {
+    backgroundColor: colors.white, borderRadius: borderRadius.md,
+    borderWidth: 1.5, borderStyle: 'dashed', borderColor: colors.gray200,
+    alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl,
+    gap: spacing.sm,
   },
+  emptyExTitle:{ fontSize: fontSize.md, fontWeight: '600', color: colors.gray600 },
+  emptyExText: { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
+  emptyText:   { fontSize: fontSize.md, color: colors.gray500, textAlign: 'center', marginTop: spacing.xxl },
+
+  exCard: { marginBottom: spacing.sm },
+  exRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   exNum: {
-    width: 24, height: 24, borderRadius: 12, backgroundColor: colors.gray100,
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2,
+    width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray100,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  exNumTxt:  { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray600 },
-  exThumb:   { width: 40, height: 40, borderRadius: borderRadius.sm, flexShrink: 0 },
+  exNumTxt:   { fontSize: fontSize.sm, fontWeight: '700', color: colors.gray600 },
+  exThumb:    { width: 52, height: 52, borderRadius: borderRadius.sm, flexShrink: 0 },
+  exThumbEmpty: {
+    width: 52, height: 52, borderRadius: borderRadius.sm,
+    backgroundColor: colors.gray100, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
   exName:    { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
   exMeta:    { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  exTag: {
+  tag: {
     alignSelf: 'flex-start', backgroundColor: colors.gray100,
     paddingHorizontal: spacing.sm, paddingVertical: 2,
     borderRadius: borderRadius.full, marginTop: spacing.xs,
   },
-  exTagTxt:  { fontSize: fontSize.xs, color: colors.gray600 },
+  tagTxt:    { fontSize: fontSize.xs, color: colors.gray600 },
   exNotes:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, fontStyle: 'italic' },
+  tapToEdit: { fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.xs },
+  removeBtn: { padding: spacing.xs },
 
-  addWeekBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: spacing.sm, padding: spacing.lg, borderRadius: borderRadius.md,
-    borderWidth: 1.5, borderStyle: 'dashed', borderColor: colors.gray200,
-    backgroundColor: colors.white,
-  },
-  addWeekTxt: { fontSize: fontSize.md, fontWeight: '500', color: colors.gray600 },
+  cuesSection: { marginTop: spacing.xl },
+  cuesTitle:   { fontSize: fontSize.md, fontWeight: '700', color: colors.black, marginBottom: spacing.md },
+  cueCard:     { marginBottom: spacing.sm },
+  cueName:     { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.xs },
+  cueText:     { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20 },
 
-  // Modal
+  // Modal styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: {
+  modalSheet: {
     backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl,
     borderTopRightRadius: borderRadius.xl, maxHeight: '90%',
   },
@@ -667,14 +734,15 @@ const styles = StyleSheet.create({
     padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  searchBox: {
+
+  searchRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: colors.gray100, paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
+    borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
-  searchInput:{ flex: 1, fontSize: fontSize.md, color: colors.black },
-  exList:     { flex: 1, paddingHorizontal: spacing.xl },
-  exPickRow:  {
+  searchInput: { flex: 1, fontSize: fontSize.md, color: colors.black },
+  exPickList:  { flex: 1, paddingHorizontal: spacing.xl },
+  exPickRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
@@ -685,24 +753,25 @@ const styles = StyleSheet.create({
   },
   exPickName: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
   exPickMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
-  noResults:  { textAlign: 'center', color: colors.gray400, paddingVertical: spacing.xxl },
+  noResultsTxt: { textAlign: 'center', color: colors.gray400, paddingVertical: spacing.xxl },
 
-  backToList:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.md },
-  backToListTxt: { fontSize: fontSize.sm, fontWeight: '500', color: colors.black },
-  selectedExCard: { alignItems: 'center', paddingVertical: spacing.lg },
-  selectedExImg:  { width: 80, height: 60, borderRadius: borderRadius.sm, marginBottom: spacing.sm },
-  selectedExName: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  selectedExMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
-
-  paramsGrid: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
-  paramField: { flex: 1 },
-  paramLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginBottom: spacing.sm },
-  paramInput: {
-    borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
-    padding: spacing.md, fontSize: fontSize.md, color: colors.black,
+  backToListBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingVertical: spacing.md, marginBottom: spacing.sm,
   },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
-  textInput: {
+  backToListTxt: { fontSize: fontSize.sm, fontWeight: '500', color: colors.black },
+  selectedExCard: { alignItems: 'center', marginBottom: spacing.lg, gap: spacing.sm },
+  selectedExImg:  { width: '100%', height: 140, borderRadius: borderRadius.sm },
+  selectedExName: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  selectedExCues: { fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center', lineHeight: 20 },
+
+  paramsGrid: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg, marginBottom: spacing.md },
+  paramField: { flex: 1 },
+  paramLabel: {
+    fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700,
+    marginBottom: spacing.sm, marginTop: spacing.sm,
+  },
+  paramInput: {
     borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.md, color: colors.black,
   },
@@ -712,13 +781,14 @@ const styles = StyleSheet.create({
   },
   confirmBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
 
-  settingsChip: {
+  assignChip: {
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full,
     borderWidth: 1, borderColor: colors.gray200, marginRight: spacing.sm,
   },
-  settingsChipActive: { backgroundColor: colors.black, borderColor: colors.black },
-  settingsChipTxt:    { fontSize: fontSize.sm, color: colors.gray600 },
-  visRow:             { gap: spacing.sm, marginBottom: spacing.lg },
+  assignChipActive: { backgroundColor: colors.black, borderColor: colors.black },
+  assignChipTxt:    { fontSize: fontSize.sm, color: colors.gray600 },
+
+  visRow:           { gap: spacing.sm, marginBottom: spacing.lg },
   visOption: {
     padding: spacing.md, borderRadius: borderRadius.sm,
     borderWidth: 1.5, borderColor: colors.gray200,
