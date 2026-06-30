@@ -26,7 +26,6 @@ class ClientService:
             .join(User, ClientProfile.user_id == User.id)
             .where(ClientProfile.pt_id == pt_id)
         )
-
         if status:
             query = query.where(ClientProfile.status == status)
         if search:
@@ -72,25 +71,21 @@ class ClientService:
         injuries: list | None = None,
         notes: str | None = None,
     ) -> tuple[ClientProfile, str]:
-        """
-        Returns (client_profile, temp_password).
-        The PT should share the temp_password with the client so they can log in.
-        We no longer call invite_user_by_email — that required SMTP to be
-        configured in Supabase which causes a 500 in dev/staging environments.
-        """
         # 0. Check email not already in our DB
         existing = await db.execute(select(User).where(User.email == email))
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=409, detail="Email already registered")
 
         # 1. Generate a secure temporary password
-        temp_password = secrets.token_urlsafe(12)  # e.g. "xK9pL2mQrT4n"
+        temp_password = secrets.token_urlsafe(12)
 
-        # 2. Create Supabase Auth user (email_confirm=True skips verification email)
+        # 2. Create Supabase Auth user
+        # ← FIXED: pass full_name so the profiles trigger doesn't fail
         try:
             supabase_user = await supabase_admin.create_user(
                 email=email,
                 password=temp_password,
+                full_name=name,          # ← This is the fix
             )
             supabase_auth_id = supabase_user["id"]
         except Exception as e:
@@ -105,7 +100,7 @@ class ClientService:
                 detail=f"Failed to create auth user: {error_str}",
             )
 
-        # 3. Create User record
+        # 3. Create User record in FastAPI DB
         user = User(
             email=email,
             name=name,

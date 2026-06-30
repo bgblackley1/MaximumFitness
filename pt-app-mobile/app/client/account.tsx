@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Modal, TextInput, ScrollView, Alert, ActivityIndicator,
+  Modal, TextInput, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -14,35 +14,36 @@ import { supabase } from '@/services/supabase';
 export default function AccountScreen() {
   const { user, profile, clientProfileId, logout } = useAuthStore();
   const router = useRouter();
-  const [editModal, setEditModal] = useState(false);
-  const [editName, setEditName]   = useState(profile?.full_name ?? '');
-  const [saving, setSaving]       = useState(false);
+  const [editModal, setEditModal]           = useState(false);
+  const [editName, setEditName]             = useState(profile?.full_name ?? profile?.name ?? '');
+  const [saving, setSaving]                 = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [loggingOut, setLoggingOut]         = useState(false);
 
-  const handleLogout = () => {
-    Alert.alert('Log out', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Log out',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
-        },
-      },
-    ]);
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await logout();
+      // _layout.tsx watches `user` and redirects to /login automatically
+    } catch (e) {
+      console.error('Logout error:', e);
+    } finally {
+      setLoggingOut(false);
+      setConfirmingLogout(false);
+    }
   };
 
-  const displayName  = profile?.full_name ?? user?.email?.split('@')[0] ?? '?';
+  const displayName  = profile?.full_name ?? profile?.name ?? user?.email?.split('@')[0] ?? '?';
   const displayEmail = user?.email ?? '';
-  const memberSince  = user?.created_at
-    ? new Date(user.created_at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  const memberSince  = profile?.created_at
+    ? new Date(profile.created_at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
     : null;
 
   const menuItems = [
-    { icon: 'person-outline'        as const, label: 'Edit Profile',   onPress: () => setEditModal(true) },
-    { icon: 'notifications-outline' as const, label: 'Notifications',  onPress: () => {} },
-    { icon: 'lock-closed-outline'   as const, label: 'Change Password', onPress: () => {} },
-    { icon: 'help-circle-outline'   as const, label: 'Help & Support',  onPress: () => {} },
+    { icon: 'person-outline'        as const, label: 'Edit Profile',    onPress: () => setEditModal(true) },
+    { icon: 'notifications-outline' as const, label: 'Notifications',   onPress: () => {} },
+    { icon: 'lock-closed-outline'   as const, label: 'Change Password',  onPress: () => {} },
+    { icon: 'help-circle-outline'   as const, label: 'Help & Support',   onPress: () => {} },
   ];
 
   return (
@@ -81,11 +82,38 @@ export default function AccountScreen() {
           ))}
         </Card>
 
-        {/* Logout */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color={colors.red500} />
-          <Text style={styles.logoutTxt}>Log out</Text>
-        </TouchableOpacity>
+        {/* Logout — inline confirmation (Alert.alert is unreliable on web) */}
+        {!confirmingLogout ? (
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={() => setConfirmingLogout(true)}
+          >
+            <Ionicons name="log-out-outline" size={20} color={colors.red500} />
+            <Text style={styles.logoutTxt}>Log out</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmText}>Are you sure you want to log out?</Text>
+            <View style={styles.confirmBtns}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => setConfirmingLogout(false)}
+                disabled={loggingOut}
+              >
+                <Text style={styles.cancelBtnTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmLogoutBtn, loggingOut && { opacity: 0.6 }]}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                {loggingOut
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <Text style={styles.confirmLogoutBtnTxt}>Log out</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <Text style={styles.version}>Maximum Fitness v1.0.0</Text>
       </ScrollView>
@@ -115,18 +143,12 @@ export default function AccountScreen() {
                   if (!editName.trim()) return;
                   setSaving(true);
                   try {
-                    // Update Supabase auth metadata
                     await supabase.auth.updateUser({
                       data: { full_name: editName.trim() },
                     });
-                    // Update the profiles table row
-                    await supabase
-                      .from('profiles')
-                      .update({ full_name: editName.trim() })
-                      .eq('id', user?.id);
                     setEditModal(false);
                   } catch (err) {
-                    Alert.alert('Error', 'Failed to update profile. Please try again.');
+                    console.error('Profile update error:', err);
                   } finally {
                     setSaving(false);
                   }
@@ -171,9 +193,36 @@ const styles = StyleSheet.create({
   menuTxt:   { flex: 1, fontSize: fontSize.md, color: colors.gray700 },
   divider:   { height: 1, backgroundColor: colors.gray100, marginLeft: spacing.xl + spacing.md + 20 },
 
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingVertical: spacing.lg },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingVertical: spacing.lg,
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm,
+    marginHorizontal: spacing.xl, marginBottom: spacing.lg,
+  },
   logoutTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.red500 },
-  version:   { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.lg },
+
+  confirmBox: {
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm,
+    padding: spacing.xl, marginHorizontal: spacing.xl, marginBottom: spacing.lg,
+    borderWidth: 1, borderColor: colors.red500 + '40',
+  },
+  confirmText: {
+    fontSize: fontSize.md, fontWeight: '500', color: colors.gray800,
+    textAlign: 'center', marginBottom: spacing.lg,
+  },
+  confirmBtns: { flexDirection: 'row', gap: spacing.md },
+  cancelBtn: {
+    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center',
+  },
+  cancelBtnTxt: { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
+  confirmLogoutBtn: {
+    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    backgroundColor: colors.red500, alignItems: 'center',
+  },
+  confirmLogoutBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
+
+  version: { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.lg },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {

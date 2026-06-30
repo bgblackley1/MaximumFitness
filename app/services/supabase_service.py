@@ -13,13 +13,27 @@ class SupabaseAdmin:
             "Content-Type": "application/json",
         }
 
-    async def create_user(self, email: str, password: str | None = None) -> dict:
-        """Create a user in Supabase Auth. If no password, generates an invite."""
+    async def create_user(
+        self,
+        email: str,
+        password: str | None = None,
+        full_name: str | None = None,
+    ) -> dict:
+        """Create a user in Supabase Auth."""
         async with httpx.AsyncClient() as client:
             body = {
                 "email": email,
                 "email_confirm": True,
-                "user_metadata": {"role": "client"},
+                # ← Pass full_name in user_metadata so the profiles trigger
+                # can populate the full_name column (NOT NULL constraint)
+                "user_metadata": {
+                    "role": "client",
+                    "full_name": full_name or email.split('@')[0],
+                },
+                # Also pass in data so Supabase raw_user_meta_data is set
+                "data": {
+                    "full_name": full_name or email.split('@')[0],
+                },
             }
             if password:
                 body["password"] = password
@@ -55,6 +69,19 @@ class SupabaseAdmin:
             response = await client.get(
                 f"{self.base_url}/auth/v1/admin/users/{supabase_user_id}",
                 headers=self.headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def update_user_metadata(
+        self, supabase_user_id: str, metadata: dict
+    ) -> dict:
+        """Update a user's metadata in Supabase Auth."""
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{self.base_url}/auth/v1/admin/users/{supabase_user_id}",
+                headers=self.headers,
+                json={"user_metadata": metadata, "data": metadata},
             )
             response.raise_for_status()
             return response.json()

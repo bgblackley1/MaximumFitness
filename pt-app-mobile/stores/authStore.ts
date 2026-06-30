@@ -13,6 +13,7 @@ interface AuthState {
   clientProfileId: string | null;
   isLoading: boolean;
   isInitialized: boolean;
+  profileError: string | null;
   login: (email: string, password: string) => Promise<{ error?: string }>;
   logout: () => Promise<void>;
   initialize: () => Promise<void>;
@@ -28,6 +29,7 @@ const RESET_STATE = {
   token: null,
   clientProfileId: null,
   isLoading: false,
+  profileError: null,
 };
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -68,27 +70,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
   },
 
-  fetchProfile: async (userId: string) => {
+  fetchProfile: async (_userId: string) => {
+    // ── FIXED: Read role from FastAPI /auth/me, NOT from Supabase profiles table.
+    // Supabase profiles table is NOT populated for admin-created client accounts,
+    // so reading from there always returns the wrong role (or null).
+    // Our FastAPI users table is the single source of truth for roles.
+    set({ profileError: null });
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+      const res = await API.get('/auth/me');
+      const userData = res.data; // { id, email, name, role, ... }
 
-      if (error) {
-        console.error('fetchProfile error:', error.message);
-        return;
-      }
+      set({
+        profile: userData,
+        role: userData.role as 'pt' | 'client',
+      });
 
-      if (data) {
-        set({ profile: data, role: data.role as 'pt' | 'client' });
-        if (data.role === 'client') {
-          await get().fetchClientProfileId();
-        }
+      if (userData.role === 'client') {
+        await get().fetchClientProfileId();
       }
-    } catch (e) {
-      console.error('fetchProfile exception:', e);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      console.error('fetchProfile error:', status, e?.message);
+
+      if (status === 404) {
+        // User authenticated in Supabase but not in FastAPI DB.
+        // This happens if client was created before the client_service fix.
+        set({
+          profileError: 'Account not found in database. Please contact your trainer.',
+          role: null,
+        });
+      }
+      // Don't set role — _layout.tsx will handle null role by redirecting to login
     }
   },
 
@@ -116,6 +128,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           token: data.session.access_token,
         });
         await get().fetchProfile(data.session.user.id);
+
+        // If profile fetch failed (404), return error so login screen shows it
+        const { profileError } = get();
+        if (profileError) {
+          set({ isLoading: false });
+          return { error: profileError };
+        }
       }
       set({ isLoading: false });
       return {};
@@ -126,18 +145,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    // Step 1: Clear React state immediately (synchronous)
     set({ ...RESET_STATE });
-
-    // Step 2: Sign out from Supabase
     try {
       await supabase.auth.signOut({ scope: 'local' });
     } catch (e) {
       console.error('SignOut error (non-fatal):', e);
     }
-
-    // Step 3: Belt-and-braces — manually clear all Supabase keys from storage
-    // This is the most reliable fix for the "logout doesn't stick on web" bug
     try {
       const keys = await AsyncStorage.getAllKeys();
       const supabaseKeys = keys.filter(
@@ -147,7 +160,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         await AsyncStorage.multiRemove(supabaseKeys);
       }
     } catch (e) {
-      // Non-fatal — storage clear failure shouldn't block logout
       console.error('Storage clear error (non-fatal):', e);
     }
   },
