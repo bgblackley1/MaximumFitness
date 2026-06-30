@@ -4,7 +4,6 @@ import {
   Modal, TextInput, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/authStore';
 import Card from '@/components/Card';
@@ -12,19 +11,32 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 import { supabase } from '@/services/supabase';
 
 export default function AccountScreen() {
-  const { user, profile, clientProfileId, logout } = useAuthStore();
-  const router = useRouter();
-  const [editModal, setEditModal]           = useState(false);
-  const [editName, setEditName]             = useState(profile?.full_name ?? profile?.name ?? '');
-  const [saving, setSaving]                 = useState(false);
+  const { user, profile, logout } = useAuthStore();
+
+  // ── Logout state ──
   const [confirmingLogout, setConfirmingLogout] = useState(false);
-  const [loggingOut, setLoggingOut]         = useState(false);
+  const [loggingOut,       setLoggingOut]       = useState(false);
+
+  // ── Edit name modal ──
+  const [editModal, setEditModal] = useState(false);
+  const [editName,  setEditName]  = useState(profile?.name ?? profile?.full_name ?? '');
+  const [savingName, setSavingName] = useState(false);
+  const [nameSuccess, setNameSuccess] = useState(false);
+
+  // ── Change password modal ──
+  const [pwModal,  setPwModal]  = useState(false);
+  const [pw1,      setPw1]      = useState('');
+  const [pw2,      setPw2]      = useState('');
+  const [pwError,  setPwError]  = useState('');
+  const [savingPw, setSavingPw] = useState(false);
+  const [pwSuccess, setPwSuccess] = useState(false);
+  const [showPw1,  setShowPw1]  = useState(false);
+  const [showPw2,  setShowPw2]  = useState(false);
 
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
       await logout();
-      // _layout.tsx watches `user` and redirects to /login automatically
     } catch (e) {
       console.error('Logout error:', e);
     } finally {
@@ -33,23 +45,89 @@ export default function AccountScreen() {
     }
   };
 
-  const displayName  = profile?.full_name ?? profile?.name ?? user?.email?.split('@')[0] ?? '?';
+  // ── Save display name ─────────────────────────────────────────────────────
+  const handleSaveName = async () => {
+    if (!editName.trim()) return;
+    setSavingName(true);
+    try {
+      await supabase.auth.updateUser({ data: { full_name: editName.trim() } });
+      setNameSuccess(true);
+      setTimeout(() => {
+        setNameSuccess(false);
+        setEditModal(false);
+      }, 1500);
+    } catch (err) {
+      console.error('Profile update error:', err);
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  // ── Change password ───────────────────────────────────────────────────────
+  const handleChangePassword = async () => {
+    setPwError('');
+
+    if (pw1.length < 8) {
+      setPwError('Password must be at least 8 characters');
+      return;
+    }
+    if (pw1 !== pw2) {
+      setPwError('Passwords do not match');
+      return;
+    }
+
+    setSavingPw(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw1 });
+      if (error) {
+        setPwError(error.message);
+        return;
+      }
+      setPwSuccess(true);
+      setPw1('');
+      setPw2('');
+      setTimeout(() => {
+        setPwSuccess(false);
+        setPwModal(false);
+      }, 2000);
+    } catch (err: any) {
+      setPwError(err.message ?? 'Something went wrong');
+    } finally {
+      setSavingPw(false);
+    }
+  };
+
+  const displayName  = profile?.name ?? profile?.full_name ?? user?.email?.split('@')[0] ?? '?';
   const displayEmail = user?.email ?? '';
   const memberSince  = profile?.created_at
     ? new Date(profile.created_at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
     : null;
 
   const menuItems = [
-    { icon: 'person-outline'        as const, label: 'Edit Profile',    onPress: () => setEditModal(true) },
-    { icon: 'notifications-outline' as const, label: 'Notifications',   onPress: () => {} },
-    { icon: 'lock-closed-outline'   as const, label: 'Change Password',  onPress: () => {} },
-    { icon: 'help-circle-outline'   as const, label: 'Help & Support',   onPress: () => {} },
+    {
+      icon: 'person-outline' as const,
+      label: 'Edit Profile',
+      onPress: () => {
+        setEditName(profile?.name ?? profile?.full_name ?? '');
+        setEditModal(true);
+      },
+    },
+    {
+      icon: 'lock-closed-outline' as const,
+      label: 'Change Password',
+      onPress: () => {
+        setPw1(''); setPw2('');
+        setPwError(''); setPwSuccess(false);
+        setPwModal(true);
+      },
+    },
+    { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => {} },
+    { icon: 'help-circle-outline'   as const, label: 'Help & Support',  onPress: () => {} },
   ];
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Account</Text>
         </View>
@@ -57,15 +135,13 @@ export default function AccountScreen() {
         {/* Profile card */}
         <Card style={styles.profileCard}>
           <View style={styles.avatarWrap}>
-            <Text style={styles.avatarTxt}>
-              {displayName.charAt(0).toUpperCase()}
-            </Text>
+            <Text style={styles.avatarTxt}>{displayName.charAt(0).toUpperCase()}</Text>
           </View>
           <Text style={styles.name}>{displayName}</Text>
           <Text style={styles.email}>{displayEmail}</Text>
-          {memberSince ? (
+          {memberSince && (
             <Text style={styles.since}>Member since {memberSince}</Text>
-          ) : null}
+          )}
         </Card>
 
         {/* Menu */}
@@ -82,7 +158,7 @@ export default function AccountScreen() {
           ))}
         </Card>
 
-        {/* Logout — inline confirmation (Alert.alert is unreliable on web) */}
+        {/* Logout */}
         {!confirmingLogout ? (
           <TouchableOpacity
             style={styles.logoutBtn}
@@ -118,7 +194,7 @@ export default function AccountScreen() {
         <Text style={styles.version}>Maximum Fitness v1.0.0</Text>
       </ScrollView>
 
-      {/* Edit Profile Modal */}
+      {/* ── Edit Profile Modal ── */}
       <Modal visible={editModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -136,29 +212,134 @@ export default function AccountScreen() {
                 onChangeText={setEditName}
                 placeholder="Your name"
                 placeholderTextColor={colors.gray400}
+                autoFocus
               />
+              {nameSuccess && (
+                <View style={styles.successBanner}>
+                  <Ionicons name="checkmark-circle" size={16} color={colors.green700} />
+                  <Text style={styles.successTxt}>Name updated!</Text>
+                </View>
+              )}
               <TouchableOpacity
-                style={[styles.saveBtn, saving && { opacity: 0.6 }]}
-                onPress={async () => {
-                  if (!editName.trim()) return;
-                  setSaving(true);
-                  try {
-                    await supabase.auth.updateUser({
-                      data: { full_name: editName.trim() },
-                    });
-                    setEditModal(false);
-                  } catch (err) {
-                    console.error('Profile update error:', err);
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-                disabled={saving}
+                style={[styles.saveBtn, (savingName || nameSuccess) && { opacity: 0.7 }]}
+                onPress={handleSaveName}
+                disabled={savingName || nameSuccess}
               >
-                {saving
+                {savingName
                   ? <ActivityIndicator color={colors.white} />
                   : <Text style={styles.saveBtnTxt}>Save Changes</Text>}
               </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Change Password Modal ── */}
+      <Modal visible={pwModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Password</Text>
+              <TouchableOpacity onPress={() => setPwModal(false)}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              {pwSuccess ? (
+                <View style={styles.pwSuccessBox}>
+                  <Ionicons name="checkmark-circle" size={40} color={colors.green700} />
+                  <Text style={styles.pwSuccessTitle}>Password updated!</Text>
+                  <Text style={styles.pwSuccessSub}>
+                    Your new password is now active.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {/* New password */}
+                  <Text style={styles.fieldLabel}>New Password</Text>
+                  <View style={styles.pwInputRow}>
+                    <TextInput
+                      style={styles.pwInput}
+                      value={pw1}
+                      onChangeText={(v) => { setPw1(v); setPwError(''); }}
+                      placeholder="At least 8 characters"
+                      placeholderTextColor={colors.gray400}
+                      secureTextEntry={!showPw1}
+                      autoFocus
+                    />
+                    <TouchableOpacity
+                      style={styles.pwToggle}
+                      onPress={() => setShowPw1((v) => !v)}
+                    >
+                      <Ionicons
+                        name={showPw1 ? 'eye-off-outline' : 'eye-outline'}
+                        size={18}
+                        color={colors.gray400}
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Confirm password */}
+                  <Text style={[styles.fieldLabel, { marginTop: spacing.lg }]}>
+                    Confirm Password
+                  </Text>
+                  <View style={styles.pwInputRow}>
+                    <TextInput
+                      style={styles.pwInput}
+                      value={pw2}
+                      onChangeText={(v) => { setPw2(v); setPwError(''); }}
+                      placeholder="Re-enter your new password"
+                      placeholderTextColor={colors.gray400}
+                      secureTextEntry={!showPw2}
+                    />
+                    <TouchableOpacity
+                      style={styles.pwToggle}
+                      onPress={() => setShowPw2((v) => !v)}
+                    >
+                      <Ionicons
+                        name={showPw2 ? 'eye-off-outline' : 'eye-outline'}
+                        size={18}
+                        color={colors.gray400}
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Strength hint */}
+                  {pw1.length > 0 && pw1.length < 8 && (
+                    <Text style={styles.hintTxt}>
+                      {8 - pw1.length} more character{8 - pw1.length !== 1 ? 's' : ''} needed
+                    </Text>
+                  )}
+                  {pw1.length >= 8 && pw2.length > 0 && pw1 !== pw2 && (
+                    <Text style={styles.hintTxtError}>Passwords don't match</Text>
+                  )}
+                  {pw1.length >= 8 && pw2.length >= 8 && pw1 === pw2 && (
+                    <Text style={styles.hintTxtOk}>✓ Passwords match</Text>
+                  )}
+
+                  {/* Error */}
+                  {pwError ? (
+                    <View style={styles.pwErrorBox}>
+                      <Ionicons name="alert-circle-outline" size={16} color={colors.red700} />
+                      <Text style={styles.pwErrorTxt}>{pwError}</Text>
+                    </View>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={[
+                      styles.saveBtn,
+                      { marginTop: spacing.xl },
+                      (savingPw || pw1 !== pw2 || pw1.length < 8) && { opacity: 0.5 },
+                    ]}
+                    onPress={handleChangePassword}
+                    disabled={savingPw || pw1 !== pw2 || pw1.length < 8}
+                  >
+                    {savingPw
+                      ? <ActivityIndicator color={colors.white} />
+                      : <Text style={styles.saveBtnTxt}>Update Password</Text>}
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           </View>
         </View>
@@ -169,29 +350,27 @@ export default function AccountScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray50 },
-  scroll: { paddingBottom: spacing.xxxl },
-  header: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.md,
-  },
-  title: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
+  scroll:    { paddingBottom: spacing.xxxl },
+  header:    { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md },
+  title:     { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
 
   profileCard: { alignItems: 'center', marginHorizontal: spacing.xl, marginBottom: spacing.lg },
   avatarWrap: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: colors.black, alignItems: 'center',
-    justifyContent: 'center', marginBottom: spacing.md,
+    width: 72, height: 72, borderRadius: 36, backgroundColor: colors.black,
+    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
   },
   avatarTxt: { color: colors.white, fontSize: fontSize.xxl, fontWeight: '700' },
-  name:  { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
-  email: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
-  since: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
+  name:      { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
+  email:     { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
+  since:     { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
 
-  menuCard:  { marginHorizontal: spacing.xl, padding: 0, overflow: 'hidden', marginBottom: spacing.lg },
-  menuItem:  { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, gap: spacing.md },
-  menuTxt:   { flex: 1, fontSize: fontSize.md, color: colors.gray700 },
-  divider:   { height: 1, backgroundColor: colors.gray100, marginLeft: spacing.xl + spacing.md + 20 },
+  menuCard: { marginHorizontal: spacing.xl, padding: 0, overflow: 'hidden', marginBottom: spacing.lg },
+  menuItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, gap: spacing.md,
+  },
+  menuTxt:  { flex: 1, fontSize: fontSize.md, color: colors.gray700 },
+  divider:  { height: 1, backgroundColor: colors.gray100 },
 
   logoutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -200,7 +379,6 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.xl, marginBottom: spacing.lg,
   },
   logoutTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.red500 },
-
   confirmBox: {
     backgroundColor: colors.red50, borderRadius: borderRadius.sm,
     padding: spacing.xl, marginHorizontal: spacing.xl, marginBottom: spacing.lg,
@@ -210,41 +388,66 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md, fontWeight: '500', color: colors.gray800,
     textAlign: 'center', marginBottom: spacing.lg,
   },
-  confirmBtns: { flexDirection: 'row', gap: spacing.md },
-  cancelBtn: {
-    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
-    borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center',
-  },
-  cancelBtnTxt: { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
-  confirmLogoutBtn: {
-    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
-    backgroundColor: colors.red500, alignItems: 'center',
-  },
+  confirmBtns:    { flexDirection: 'row', gap: spacing.md },
+  cancelBtn:      { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center' },
+  cancelBtnTxt:   { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
+  confirmLogoutBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, backgroundColor: colors.red500, alignItems: 'center' },
   confirmLogoutBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
 
   version: { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.lg },
 
+  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
+    borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl,
     paddingBottom: spacing.xxxl,
   },
   modalHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
-  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  modalBody:  { padding: spacing.xl },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginBottom: spacing.sm },
+  modalTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  modalBody:   { padding: spacing.xl },
+  fieldLabel:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginBottom: spacing.sm },
   input: {
     borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.md, color: colors.black, marginBottom: spacing.lg,
   },
+  successBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.green50, padding: spacing.md,
+    borderRadius: borderRadius.sm, marginBottom: spacing.md,
+  },
+  successTxt: { fontSize: fontSize.sm, color: colors.green700, fontWeight: '500' },
   saveBtn: {
     backgroundColor: colors.black, borderRadius: borderRadius.sm,
     paddingVertical: spacing.lg, alignItems: 'center',
   },
   saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
+
+  // Password modal
+  pwInputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
+    paddingRight: spacing.md, marginBottom: spacing.xs,
+  },
+  pwInput:  { flex: 1, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
+  pwToggle: { padding: spacing.xs },
+  hintTxt: {
+    fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs,
+  },
+  hintTxtError: { fontSize: fontSize.xs, color: colors.red500, marginBottom: spacing.xs },
+  hintTxtOk:    { fontSize: fontSize.xs, color: colors.green700, marginBottom: spacing.xs },
+  pwErrorBox: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.red50, padding: spacing.md,
+    borderRadius: borderRadius.sm, marginTop: spacing.md,
+  },
+  pwErrorTxt: { fontSize: fontSize.sm, color: colors.red700, flex: 1 },
+  pwSuccessBox: {
+    alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm,
+  },
+  pwSuccessTitle: { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
+  pwSuccessSub:   { fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center' },
 });
