@@ -1,12 +1,7 @@
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, KeyboardAvoidingView,
+  Platform, TouchableOpacity, Modal, Clipboard, Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,51 +9,74 @@ import { Ionicons } from '@expo/vector-icons';
 import API from '@/services/api';
 import Input from '@/components/Input';
 import Button from '@/components/Button';
-import { colors, fontSize, spacing } from '@/constants/theme';
+import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
 export default function AddClientScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError]     = useState('');
+
+  // ── Success state ──
+  const [successModal, setSuccessModal]   = useState(false);
+  const [createdClient, setCreatedClient] = useState<{
+    name: string; email: string; temp_password: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+
   const [form, setForm] = useState({
-    name: '',
-    email: '',
-    age: '',
-    sex: '',
-    height_cm: '',
-    starting_weight_kg: '',
-    notes: '',
+    name: '', email: '', age: '', sex: '',
+    height_cm: '', starting_weight_kg: '', notes: '',
   });
 
-  const update = (key: string, value: string) => {
+  const update = (key: string, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
-  };
 
   const handleSubmit = async () => {
     if (!form.name || !form.email) {
       setError('Name and email are required');
       return;
     }
-
     setError('');
     setLoading(true);
-
     try {
-      await API.post('/clients', {
-        name: form.name,
-        email: form.email,
-        age: form.age ? Number(form.age) : null,
-        sex: form.sex || null,
-        height_cm: form.height_cm ? Number(form.height_cm) : null,
-        starting_weight_kg: form.starting_weight_kg ? Number(form.starting_weight_kg) : null,
-        notes: form.notes || null,
+      const res = await API.post('/clients', {
+        name:                form.name,
+        email:               form.email,
+        age:                 form.age                 ? Number(form.age)                 : null,
+        sex:                 form.sex                 || null,
+        height_cm:           form.height_cm           ? Number(form.height_cm)           : null,
+        starting_weight_kg:  form.starting_weight_kg  ? Number(form.starting_weight_kg)  : null,
+        notes:               form.notes               || null,
       });
-      router.back();
+      // Show success modal with temp password
+      setCreatedClient({
+        name:          form.name,
+        email:         form.email,
+        temp_password: res.data.temp_password,
+      });
+      setSuccessModal(true);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to create client');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCopy = () => {
+    if (!createdClient) return;
+    const text = `Login details for Maximum Fitness:\nEmail: ${createdClient.email}\nPassword: ${createdClient.temp_password}`;
+    Clipboard.setString(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handleDone = () => {
+    setSuccessModal(false);
+    setCreatedClient(null);
+    setCopied(false);
+    // Reset form
+    setForm({ name: '', email: '', age: '', sex: '', height_cm: '', starting_weight_kg: '', notes: '' });
+    router.back();
   };
 
   return (
@@ -76,7 +94,10 @@ export default function AddClientScreen() {
           <View style={{ width: 44 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
           {error ? (
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{error}</Text>
@@ -89,7 +110,6 @@ export default function AddClientScreen() {
             onChangeText={(v) => update('name', v)}
             placeholder="Full name"
           />
-
           <Input
             label="Email *"
             value={form.email}
@@ -98,7 +118,6 @@ export default function AddClientScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
           />
-
           <View style={styles.row}>
             <View style={styles.halfInput}>
               <Input
@@ -118,7 +137,6 @@ export default function AddClientScreen() {
               />
             </View>
           </View>
-
           <View style={styles.row}>
             <View style={styles.halfInput}>
               <Input
@@ -139,12 +157,11 @@ export default function AddClientScreen() {
               />
             </View>
           </View>
-
           <Input
             label="Notes"
             value={form.notes}
             onChangeText={(v) => update('notes', v)}
-            placeholder="Any relevant notes, injuries, goals..."
+            placeholder="Injuries, goals, preferences..."
             multiline
             numberOfLines={4}
             style={{ height: 100, textAlignVertical: 'top' }}
@@ -158,55 +175,140 @@ export default function AddClientScreen() {
           />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* ── Success Modal ── */}
+      <Modal visible={successModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            {/* Tick icon */}
+            <View style={styles.successIcon}>
+              <Ionicons name="checkmark" size={32} color={colors.white} />
+            </View>
+
+            <Text style={styles.successTitle}>Client Created!</Text>
+            <Text style={styles.successSubtitle}>
+              Share these login details with{' '}
+              <Text style={{ fontWeight: '700' }}>{createdClient?.name}</Text>
+            </Text>
+
+            {/* Login details card */}
+            <View style={styles.credentialsCard}>
+              <View style={styles.credRow}>
+                <Ionicons name="mail-outline" size={16} color={colors.gray500} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.credLabel}>Email</Text>
+                  <Text style={styles.credValue}>{createdClient?.email}</Text>
+                </View>
+              </View>
+              <View style={styles.credDivider} />
+              <View style={styles.credRow}>
+                <Ionicons name="key-outline" size={16} color={colors.gray500} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.credLabel}>Temporary Password</Text>
+                  <Text style={styles.credPassword}>{createdClient?.temp_password}</Text>
+                </View>
+              </View>
+            </View>
+
+            <Text style={styles.noteText}>
+              ⚠️ The client should change their password after first login.
+            </Text>
+
+            {/* Copy button */}
+            <TouchableOpacity
+              style={[styles.copyBtn, copied && styles.copyBtnSuccess]}
+              onPress={handleCopy}
+            >
+              <Ionicons
+                name={copied ? 'checkmark-circle-outline' : 'copy-outline'}
+                size={18}
+                color={copied ? colors.green700 : colors.black}
+              />
+              <Text style={[styles.copyBtnTxt, copied && { color: colors.green700 }]}>
+                {copied ? 'Copied to clipboard!' : 'Copy login details'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Done */}
+            <TouchableOpacity style={styles.doneBtn} onPress={handleDone}>
+              <Text style={styles.doneBtnTxt}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.white,
-  },
+  container: { flex: 1, backgroundColor: colors.white },
   header: {
-    flexDirection: 'row',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderBottomWidth: 1, borderBottomColor: colors.gray100,
+  },
+  backBtn:   { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  title:     { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  scroll:    { padding: spacing.xl },
+  errorBox:  {
+    backgroundColor: colors.red50, borderWidth: 1, borderColor: colors.red500,
+    borderRadius: 8, padding: spacing.md, marginBottom: spacing.lg,
+  },
+  errorText: { fontSize: fontSize.sm, color: colors.red700 },
+  row:       { flexDirection: 'row', gap: spacing.md },
+  halfInput: { flex: 1 },
+
+  // Modal
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center', justifyContent: 'center', padding: spacing.xl,
+  },
+  modalBox: {
+    backgroundColor: colors.white, borderRadius: borderRadius.xl,
+    padding: spacing.xl, width: '100%', maxWidth: 400,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray100,
   },
-  backBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+  successIcon: {
+    width: 64, height: 64, borderRadius: 32, backgroundColor: colors.black,
+    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg,
   },
-  title: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.black,
+  successTitle: {
+    fontSize: fontSize.xxl, fontWeight: '700', color: colors.black,
+    marginBottom: spacing.sm,
   },
-  scroll: {
-    padding: spacing.xl,
+  successSubtitle: {
+    fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center',
+    marginBottom: spacing.xl, lineHeight: 20,
   },
-  errorBox: {
-    backgroundColor: colors.red50,
-    borderWidth: 1,
-    borderColor: colors.red500,
-    borderRadius: 8,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
+  credentialsCard: {
+    width: '100%', borderWidth: 1.5, borderColor: colors.gray200,
+    borderRadius: borderRadius.md, overflow: 'hidden', marginBottom: spacing.md,
   },
-  errorText: {
-    fontSize: fontSize.sm,
-    color: colors.red700,
+  credRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md,
+    padding: spacing.lg,
   },
-  row: {
-    flexDirection: 'row',
-    gap: spacing.md,
+  credDivider:  { height: 1, backgroundColor: colors.gray100 },
+  credLabel:    { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs },
+  credValue:    { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  credPassword: {
+    fontSize: fontSize.lg, fontWeight: '700', color: colors.black,
+    letterSpacing: 1,
   },
-  halfInput: {
-    flex: 1,
+  noteText: {
+    fontSize: fontSize.xs, color: colors.gray500, textAlign: 'center',
+    marginBottom: spacing.xl, lineHeight: 18,
   },
+  copyBtn: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    borderWidth: 1.5, borderColor: colors.gray200, marginBottom: spacing.sm,
+  },
+  copyBtnSuccess: { borderColor: colors.green700, backgroundColor: colors.green50 },
+  copyBtnTxt:    { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  doneBtn: {
+    width: '100%', backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    paddingVertical: spacing.lg, alignItems: 'center',
+  },
+  doneBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
 });
