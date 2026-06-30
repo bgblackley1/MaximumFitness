@@ -21,26 +21,24 @@ export default function WorkoutDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving]         = useState(false);
 
-  // The exercises currently in the plan (from weeks[0].days[0].exercises)
   const [planExercises, setPlanExercises] = useState<any[]>([]);
-  // The day ID we're editing (always the first day)
-  const [dayId, setDayId] = useState<string | null>(null);
+  const [dayId, setDayId]                 = useState<string | null>(null);
 
-  // ── Add exercise to plan modal ──
-  const [addModal, setAddModal]       = useState(false);
-  const [exSearch, setExSearch]       = useState('');
-  const [selectedEx, setSelectedEx]   = useState<any | null>(null);
-  const [exParams, setExParams]       = useState({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
+  // ── Add exercise modal ──
+  const [addModal, setAddModal]     = useState(false);
+  const [exSearch, setExSearch]     = useState('');
+  const [selectedEx, setSelectedEx] = useState<any | null>(null);
+  const [exParams, setExParams]     = useState({ sets: '3', reps: '8-12', rest_seconds: '60', notes: '' });
 
-  // ── Edit exercise in plan modal (edit sets/reps for this plan entry) ──
-  const [editPlanExModal, setEditPlanExModal] = useState(false);
-  const [editingPlanEx, setEditingPlanEx]     = useState<any | null>(null);
+  // ── Edit exercise in plan modal ──
+  const [editPlanExModal, setEditPlanExModal]   = useState(false);
+  const [editingPlanEx, setEditingPlanEx]       = useState<any | null>(null);
   const [editPlanExParams, setEditPlanExParams] = useState({ sets: '', reps: '', rest_seconds: '', notes: '' });
 
-  // ── Plan settings modal ──
-  const [settingsModal, setSettingsModal]   = useState(false);
-  const [planSettings, setPlanSettings]     = useState({ title: '', goal_focus: '', visibility: 'draft' });
-  const [allClients, setAllClients]         = useState<any[]>([]);
+  // ── Settings modal ──
+  const [settingsModal, setSettingsModal]     = useState(false);
+  const [planSettings, setPlanSettings]       = useState({ title: '', goal_focus: '', visibility: 'draft' });
+  const [allClients, setAllClients]           = useState<any[]>([]);
   const [assignedClientId, setAssignedClientId] = useState<string>('');
 
   useEffect(() => {
@@ -63,8 +61,6 @@ export default function WorkoutDetailScreen() {
           visibility: p.visibility ?? 'draft',
         });
         setAssignedClientId(p.client_id ?? '');
-
-        // Extract exercises from the first day (Week 1, Day 1)
         const firstDay = p.weeks?.[0]?.days?.[0];
         if (firstDay) {
           setDayId(firstDay.id);
@@ -86,37 +82,37 @@ export default function WorkoutDetailScreen() {
     setRefreshing(false);
   };
 
-  // ── Save entire plan with updated exercises ────────────────────────────────
-  const savePlanWithExercises = async (updatedExercises: any[], updatedSettings?: typeof planSettings, updatedClientId?: string) => {
+  // ── Save plan ─────────────────────────────────────────────────────────────
+  const savePlanWithExercises = async (
+    updatedExercises: any[],
+    updatedSettings?: typeof planSettings,
+    updatedClientId?: string,
+  ) => {
     if (!plan) return;
     setSaving(true);
-    const settings = updatedSettings ?? planSettings;
-    const clientId = updatedClientId !== undefined ? updatedClientId : assignedClientId;
+    const settings  = updatedSettings ?? planSettings;
+    const clientId  = updatedClientId !== undefined ? updatedClientId : assignedClientId;
     try {
       await API.put(`/workout-plans/${id}`, {
         title:      settings.title || plan.title,
         client_id:  clientId || null,
         goal_focus: settings.goal_focus || null,
         visibility: settings.visibility,
-        weeks: [
-          {
-            week_number: 1,
-            days: [
-              {
-                day_label: 'Workout',
-                day_order: 1,
-                exercises: updatedExercises.map((e: any, idx: number) => ({
-                  exercise_id:  e.exercise_id ?? e.exercise?.id,
-                  order:        idx + 1,
-                  sets:         e.sets,
-                  reps:         e.reps,
-                  rest_seconds: e.rest_seconds,
-                  notes:        e.notes || null,
-                })),
-              },
-            ],
-          },
-        ],
+        weeks: [{
+          week_number: 1,
+          days: [{
+            day_label: 'Workout',
+            day_order:  1,
+            exercises: updatedExercises.map((e: any, idx: number) => ({
+              exercise_id:  e.exercise_id ?? e.exercise?.id,
+              order:        idx + 1,
+              sets:         e.sets,
+              reps:         e.reps,
+              rest_seconds: e.rest_seconds,
+              notes:        e.notes || null,
+            })),
+          }],
+        }],
       });
       await loadAll();
     } catch (err: any) {
@@ -182,7 +178,7 @@ export default function WorkoutDetailScreen() {
   const confirmEditPlanEx = async () => {
     if (!editingPlanEx) return;
     const updated = planExercises.map((e) => {
-      const key = e.exercise_id ?? e.exercise?.id;
+      const key  = e.exercise_id ?? e.exercise?.id;
       const eKey = editingPlanEx.exercise_id ?? editingPlanEx.exercise?.id;
       if (key === eKey && e.order === editingPlanEx.order) {
         return {
@@ -201,7 +197,7 @@ export default function WorkoutDetailScreen() {
     await savePlanWithExercises(updated);
   };
 
-  // ── Save settings ──────────────────────────────────────────────────────────
+  // ── Save settings ─────────────────────────────────────────────────────────
   const saveSettings = async () => {
     setSettingsModal(false);
     await savePlanWithExercises(planExercises, planSettings, assignedClientId);
@@ -227,9 +223,13 @@ export default function WorkoutDetailScreen() {
   if (!plan) {
     return (
       <SafeAreaView style={styles.container}>
-        <TouchableOpacity style={styles.backRow} onPress={() => router.back()}>
+        {/* ↓ FIXED: always goes to workouts list, not home */}
+        <TouchableOpacity
+          style={styles.backRow}
+          onPress={() => router.navigate('/pt/workouts')}
+        >
           <Ionicons name="arrow-back" size={22} color={colors.black} />
-          <Text style={styles.backTxt}>Back</Text>
+          <Text style={styles.backTxt}>Back to Routines</Text>
         </TouchableOpacity>
         <Text style={styles.emptyText}>Plan not found.</Text>
       </SafeAreaView>
@@ -238,9 +238,12 @@ export default function WorkoutDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
+      {/* Header — FIXED back button */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity
+          onPress={() => router.navigate('/pt/workouts')}  // ← was router.back()
+          style={styles.backBtn}
+        >
           <Ionicons name="arrow-back" size={22} color={colors.black} />
         </TouchableOpacity>
         <View style={{ flex: 1, marginLeft: spacing.sm }}>
@@ -253,11 +256,7 @@ export default function WorkoutDetailScreen() {
           <Ionicons name="settings-outline" size={20} color={colors.black} />
         </TouchableOpacity>
         {saving && (
-          <ActivityIndicator
-            color={colors.black}
-            style={{ marginLeft: spacing.sm }}
-            size="small"
-          />
+          <ActivityIndicator color={colors.black} style={{ marginLeft: spacing.sm }} size="small" />
         )}
       </View>
 
@@ -285,10 +284,7 @@ export default function WorkoutDetailScreen() {
         </View>
 
         {planExercises.length === 0 ? (
-          <TouchableOpacity
-            style={styles.emptyExCard}
-            onPress={() => setAddModal(true)}
-          >
+          <TouchableOpacity style={styles.emptyExCard} onPress={() => setAddModal(true)}>
             <Ionicons name="add-circle-outline" size={32} color={colors.gray300} />
             <Text style={styles.emptyExTitle}>No exercises yet</Text>
             <Text style={styles.emptyExText}>Tap to add your first exercise to this routine.</Text>
@@ -297,12 +293,9 @@ export default function WorkoutDetailScreen() {
           planExercises.map((ex: any, idx: number) => (
             <Card key={`${ex.exercise_id ?? ex.exercise?.id}-${idx}`} style={styles.exCard}>
               <View style={styles.exRow}>
-                {/* Order number */}
                 <View style={styles.exNum}>
                   <Text style={styles.exNumTxt}>{idx + 1}</Text>
                 </View>
-
-                {/* Exercise image thumbnail */}
                 {ex.exercise?.image_url ? (
                   <Image source={{ uri: ex.exercise.image_url }} style={styles.exThumb} />
                 ) : (
@@ -310,8 +303,6 @@ export default function WorkoutDetailScreen() {
                     <Ionicons name="barbell-outline" size={18} color={colors.gray400} />
                   </View>
                 )}
-
-                {/* Exercise info */}
                 <TouchableOpacity style={{ flex: 1 }} onPress={() => openEditPlanEx(ex)}>
                   <Text style={styles.exName}>{ex.exercise?.name ?? 'Exercise'}</Text>
                   <Text style={styles.exMeta}>
@@ -323,17 +314,10 @@ export default function WorkoutDetailScreen() {
                       <Text style={styles.tagTxt}>{ex.exercise.muscle_group}</Text>
                     </View>
                   ) : null}
-                  {ex.notes ? (
-                    <Text style={styles.exNotes}>{ex.notes}</Text>
-                  ) : null}
+                  {ex.notes ? <Text style={styles.exNotes}>{ex.notes}</Text> : null}
                   <Text style={styles.tapToEdit}>Tap to edit sets/reps →</Text>
                 </TouchableOpacity>
-
-                {/* Remove button */}
-                <TouchableOpacity
-                  onPress={() => removeExercise(idx)}
-                  style={styles.removeBtn}
-                >
+                <TouchableOpacity onPress={() => removeExercise(idx)} style={styles.removeBtn}>
                   <Ionicons name="close-circle" size={22} color={colors.gray300} />
                 </TouchableOpacity>
               </View>
@@ -341,18 +325,16 @@ export default function WorkoutDetailScreen() {
           ))
         )}
 
-        {/* Coaching cues section */}
+        {/* Coaching cues */}
         {planExercises.some((e) => e.exercise?.cues) && (
           <View style={styles.cuesSection}>
             <Text style={styles.cuesTitle}>Coaching Cues</Text>
-            {planExercises
-              .filter((e) => e.exercise?.cues)
-              .map((ex, idx) => (
-                <Card key={idx} style={styles.cueCard}>
-                  <Text style={styles.cueName}>{ex.exercise.name}</Text>
-                  <Text style={styles.cueText}>{ex.exercise.cues}</Text>
-                </Card>
-              ))}
+            {planExercises.filter((e) => e.exercise?.cues).map((ex, idx) => (
+              <Card key={idx} style={styles.cueCard}>
+                <Text style={styles.cueName}>{ex.exercise.name}</Text>
+                <Text style={styles.cueText}>{ex.exercise.cues}</Text>
+              </Card>
+            ))}
           </View>
         )}
       </ScrollView>
@@ -370,7 +352,6 @@ export default function WorkoutDetailScreen() {
 
             {!selectedEx ? (
               <>
-                {/* Search bar */}
                 <View style={styles.searchRow}>
                   <Ionicons name="search-outline" size={16} color={colors.gray400} />
                   <TextInput
@@ -387,8 +368,6 @@ export default function WorkoutDetailScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
-
-                {/* Exercise list */}
                 <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
                   {filteredExercises.length === 0 ? (
                     <Text style={styles.noResultsTxt}>No exercises match "{exSearch}"</Text>
@@ -419,7 +398,6 @@ export default function WorkoutDetailScreen() {
                 </ScrollView>
               </>
             ) : (
-              /* Exercise params screen */
               <ScrollView style={styles.exPickList} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
                 <TouchableOpacity
                   style={styles.backToListBtn}
@@ -429,29 +407,19 @@ export default function WorkoutDetailScreen() {
                   <Text style={styles.backToListTxt}>Back to list</Text>
                 </TouchableOpacity>
 
-                {/* Selected exercise preview */}
                 <Card style={styles.selectedExCard}>
                   {selectedEx.image_url ? (
-                    <Image
-                      source={{ uri: selectedEx.image_url }}
-                      style={styles.selectedExImg}
-                      resizeMode="cover"
-                    />
+                    <Image source={{ uri: selectedEx.image_url }} style={styles.selectedExImg} />
                   ) : null}
                   <Text style={styles.selectedExName}>{selectedEx.name}</Text>
                   {selectedEx.muscle_group ? (
-                    <View style={styles.tag}>
-                      <Text style={styles.tagTxt}>{selectedEx.muscle_group}</Text>
-                    </View>
+                    <View style={styles.tag}><Text style={styles.tagTxt}>{selectedEx.muscle_group}</Text></View>
                   ) : null}
                   {selectedEx.cues ? (
-                    <Text style={styles.selectedExCues} numberOfLines={3}>
-                      💡 {selectedEx.cues}
-                    </Text>
+                    <Text style={styles.selectedExCues} numberOfLines={3}>💡 {selectedEx.cues}</Text>
                   ) : null}
                 </Card>
 
-                {/* Sets / Reps / Rest */}
                 <View style={styles.paramsGrid}>
                   <View style={styles.paramField}>
                     <Text style={styles.paramLabel}>Sets</Text>
@@ -506,7 +474,7 @@ export default function WorkoutDetailScreen() {
         </View>
       </Modal>
 
-      {/* ── Edit Plan Exercise Modal (sets/reps) ── */}
+      {/* ── Edit Plan Exercise Modal ── */}
       <Modal visible={editPlanExModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
@@ -627,10 +595,7 @@ export default function WorkoutDetailScreen() {
                 ].map((opt) => (
                   <TouchableOpacity
                     key={opt.val}
-                    style={[
-                      styles.visOption,
-                      planSettings.visibility === opt.val && styles.visOptionActive,
-                    ]}
+                    style={[styles.visOption, planSettings.visibility === opt.val && styles.visOptionActive]}
                     onPress={() => setPlanSettings((f) => ({ ...f, visibility: opt.val }))}
                   >
                     <Text style={[
@@ -665,12 +630,9 @@ const styles = StyleSheet.create({
   headerTitle:{ fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   headerSub:  { fontSize: fontSize.xs, color: colors.gray400, marginTop: 1 },
   iconBtn:    { padding: spacing.sm, marginLeft: spacing.xs },
-
-  backRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.lg },
-  backTxt: { fontSize: fontSize.md, color: colors.black },
-
-  scroll: { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
-
+  backRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.lg },
+  backTxt:    { fontSize: fontSize.md, color: colors.black },
+  scroll:     { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
   sectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', marginBottom: spacing.lg,
@@ -682,7 +644,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm, borderRadius: borderRadius.full,
   },
   addExBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
-
   emptyExCard: {
     backgroundColor: colors.white, borderRadius: borderRadius.md,
     borderWidth: 1.5, borderStyle: 'dashed', borderColor: colors.gray200,
@@ -692,9 +653,8 @@ const styles = StyleSheet.create({
   emptyExTitle:{ fontSize: fontSize.md, fontWeight: '600', color: colors.gray600 },
   emptyExText: { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
   emptyText:   { fontSize: fontSize.md, color: colors.gray500, textAlign: 'center', marginTop: spacing.xxl },
-
-  exCard: { marginBottom: spacing.sm },
-  exRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  exCard:      { marginBottom: spacing.sm },
+  exRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   exNum: {
     width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray100,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -716,14 +676,11 @@ const styles = StyleSheet.create({
   exNotes:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, fontStyle: 'italic' },
   tapToEdit: { fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.xs },
   removeBtn: { padding: spacing.xs },
-
   cuesSection: { marginTop: spacing.xl },
   cuesTitle:   { fontSize: fontSize.md, fontWeight: '700', color: colors.black, marginBottom: spacing.md },
   cueCard:     { marginBottom: spacing.sm },
   cueName:     { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.xs },
   cueText:     { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20 },
-
-  // Modal styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl,
@@ -734,7 +691,6 @@ const styles = StyleSheet.create({
     padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-
   searchRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
@@ -754,7 +710,6 @@ const styles = StyleSheet.create({
   exPickName: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
   exPickMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
   noResultsTxt: { textAlign: 'center', color: colors.gray400, paddingVertical: spacing.xxl },
-
   backToListBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingVertical: spacing.md, marginBottom: spacing.sm,
@@ -764,7 +719,6 @@ const styles = StyleSheet.create({
   selectedExImg:  { width: '100%', height: 140, borderRadius: borderRadius.sm },
   selectedExName: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   selectedExCues: { fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center', lineHeight: 20 },
-
   paramsGrid: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg, marginBottom: spacing.md },
   paramField: { flex: 1 },
   paramLabel: {
@@ -780,14 +734,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl,
   },
   confirmBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
-
   assignChip: {
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full,
     borderWidth: 1, borderColor: colors.gray200, marginRight: spacing.sm,
   },
   assignChipActive: { backgroundColor: colors.black, borderColor: colors.black },
   assignChipTxt:    { fontSize: fontSize.sm, color: colors.gray600 },
-
   visRow:           { gap: spacing.sm, marginBottom: spacing.lg },
   visOption: {
     padding: spacing.md, borderRadius: borderRadius.sm,

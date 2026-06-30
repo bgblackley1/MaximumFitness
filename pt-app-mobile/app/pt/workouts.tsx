@@ -22,8 +22,7 @@ const MUSCLE_GROUPS = [
 ];
 const CATEGORIES = ['Compound', 'Isolation', 'Cardio', 'Plyometric', 'Stretch'];
 const EQUIPMENT  = ['Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight', 'Kettlebell', 'Other'];
-
-const BLANK_EX = { name: '', category: '', muscle_group: '', equipment: '', cues: '', image_url: '' };
+const BLANK_EX   = { name: '', category: '', muscle_group: '', equipment: '', cues: '', image_url: '' };
 
 export default function WorkoutsScreen() {
   const router = useRouter();
@@ -41,12 +40,12 @@ export default function WorkoutsScreen() {
   const [localImageUri, setLocalImageUri]   = useState<string | null>(null);
 
   // ── Edit exercise modal ──
-  const [editExModal, setEditExModal]   = useState(false);
-  const [editingEx, setEditingEx]       = useState<any | null>(null);
-  const [editExForm, setEditExForm]     = useState(BLANK_EX);
-  const [savingEditEx, setSavingEditEx] = useState(false);
+  const [editExModal, setEditExModal] = useState(false);
+  const [editingEx, setEditingEx]     = useState<any | null>(null);
+  const [editExForm, setEditExForm]   = useState(BLANK_EX);
+  const [savingEditEx, setSavingEditEx]   = useState(false);
   const [editUploadingImg, setEditUploadingImg] = useState(false);
-  const [editLocalImg, setEditLocalImg] = useState<string | null>(null);
+  const [editLocalImg, setEditLocalImg]         = useState<string | null>(null);
 
   // ── Create plan modal ──
   const [planModal, setPlanModal] = useState(false);
@@ -74,10 +73,10 @@ export default function WorkoutsScreen() {
     setRefreshing(false);
   };
 
-  // ── Image picker (shared) ─────────────────────────────────────────────────
+  // ── Image picker — FIXED: use mimeType, not URI parsing ───────────────────
   const pickImage = async (
-    onUri: (uri: string) => void,
-    onUrl: (url: string) => void,
+    onUri:      (uri: string) => void,
+    onUrl:      (url: string) => void,
     setUploading: (v: boolean) => void,
   ) => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -99,14 +98,31 @@ export default function WorkoutsScreen() {
     setUploading(true);
 
     try {
+      // ── FIX: derive extension from mimeType, not from the URI string ──────
+      // On web, asset.uri is a blob URL like blob:http://localhost:8081/...
+      // which has no file extension to parse.
+      const mimeType = asset.mimeType ?? 'image/jpeg';
+      const mimeToExt: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg':  'jpg',
+        'image/png':  'png',
+        'image/webp': 'webp',
+        'image/gif':  'gif',
+        'image/heic': 'jpg', // iOS HEIC — convert to jpg
+        'image/heif': 'jpg',
+      };
+      const ext      = mimeToExt[mimeType] ?? 'jpg';
+      const fileName = `exercise_${Date.now()}.${ext}`;  // ← clean filename
+
       const response = await fetch(asset.uri);
       const blob     = await response.blob();
-      const ext      = asset.uri.split('.').pop() ?? 'jpg';
-      const fileName = `exercise_${Date.now()}.${ext}`;
 
       const { data, error } = await supabase.storage
         .from('exercises')
-        .upload(fileName, blob, { contentType: `image/${ext}`, upsert: true });
+        .upload(fileName, blob, {
+          contentType: mimeType,   // ← also use mimeType here, not `image/${ext}`
+          upsert: true,
+        });
 
       if (error) {
         Alert.alert('Upload failed', error.message);
@@ -117,6 +133,7 @@ export default function WorkoutsScreen() {
       const { data: { publicUrl } } = supabase.storage
         .from('exercises')
         .getPublicUrl(fileName);
+
       onUrl(publicUrl);
     } catch (err: any) {
       Alert.alert('Upload error', err.message ?? 'Unknown error');
@@ -259,7 +276,7 @@ export default function WorkoutsScreen() {
     ]);
   };
 
-  // ── Chip picker component ─────────────────────────────────────────────────
+  // ── Reusable chip picker ──────────────────────────────────────────────────
   const ChipPicker = ({
     options, selected, onSelect,
   }: { options: string[]; selected: string; onSelect: (v: string) => void }) => (
@@ -276,10 +293,9 @@ export default function WorkoutsScreen() {
     </ScrollView>
   );
 
-  // ── ImageUploadField component ────────────────────────────────────────────
+  // ── Reusable image upload field ───────────────────────────────────────────
   const ImageUploadField = ({
-    localUri, imageUrl, uploading,
-    onPick, onRemove,
+    localUri, imageUrl, uploading, onPick, onRemove,
   }: {
     localUri: string | null; imageUrl: string;
     uploading: boolean; onPick: () => void; onRemove: () => void;
@@ -293,11 +309,7 @@ export default function WorkoutsScreen() {
         {uploading ? (
           <ActivityIndicator color={colors.gray600} />
         ) : localUri || imageUrl ? (
-          <Image
-            source={{ uri: localUri || imageUrl }}
-            style={styles.imagePreview}
-            resizeMode="cover"
-          />
+          <Image source={{ uri: localUri || imageUrl }} style={styles.imagePreview} resizeMode="cover" />
         ) : (
           <>
             <Ionicons name="camera-outline" size={28} color={colors.gray400} />
@@ -313,7 +325,7 @@ export default function WorkoutsScreen() {
     </>
   );
 
-  // ── Render items ──────────────────────────────────────────────────────────
+  // ── Render plan card ──────────────────────────────────────────────────────
   const renderPlan = ({ item }: { item: any }) => (
     <TouchableOpacity
       onPress={() => router.push(`/pt/workout-detail?id=${item.id}` as any)}
@@ -324,9 +336,7 @@ export default function WorkoutsScreen() {
         <View style={styles.cardRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{item.title}</Text>
-            {item.goal_focus && (
-              <Text style={styles.cardSub}>{item.goal_focus}</Text>
-            )}
+            {item.goal_focus && <Text style={styles.cardSub}>{item.goal_focus}</Text>}
             {item.client_id && (
               <Text style={styles.cardClient}>
                 👤 {clients.find((c: any) => c.id === item.client_id)?.name ?? 'Assigned to client'}
@@ -345,6 +355,7 @@ export default function WorkoutsScreen() {
     </TouchableOpacity>
   );
 
+  // ── Render exercise card ──────────────────────────────────────────────────
   const renderExercise = ({ item }: { item: any }) => (
     <TouchableOpacity onPress={() => openEditExercise(item)} activeOpacity={0.8}>
       <Card style={styles.card}>
@@ -359,19 +370,11 @@ export default function WorkoutsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{item.name}</Text>
             <View style={styles.tagsRow}>
-              {item.muscle_group && (
-                <View style={styles.tag}><Text style={styles.tagText}>{item.muscle_group}</Text></View>
-              )}
-              {item.category && (
-                <View style={styles.tag}><Text style={styles.tagText}>{item.category}</Text></View>
-              )}
-              {item.equipment && (
-                <View style={styles.tag}><Text style={styles.tagText}>{item.equipment}</Text></View>
-              )}
+              {item.muscle_group && <View style={styles.tag}><Text style={styles.tagText}>{item.muscle_group}</Text></View>}
+              {item.category     && <View style={styles.tag}><Text style={styles.tagText}>{item.category}</Text></View>}
+              {item.equipment    && <View style={styles.tag}><Text style={styles.tagText}>{item.equipment}</Text></View>}
             </View>
-            {item.cues ? (
-              <Text style={styles.cues} numberOfLines={2}>{item.cues}</Text>
-            ) : null}
+            {item.cues ? <Text style={styles.cues} numberOfLines={2}>{item.cues}</Text> : null}
             <Text style={styles.tapToEditHint}>Tap to edit · Long press to delete</Text>
           </View>
           <TouchableOpacity
@@ -406,9 +409,7 @@ export default function WorkoutsScreen() {
             onPress={() => setActiveTab(t)}
           >
             <Text style={[styles.tabText, activeTab === t && styles.tabTextActive]}>
-              {t === 'plans'
-                ? `Routines (${plans.length})`
-                : `Exercises (${exercises.length})`}
+              {t === 'plans' ? `Routines (${plans.length})` : `Exercises (${exercises.length})`}
             </Text>
           </TouchableOpacity>
         ))}
@@ -425,7 +426,7 @@ export default function WorkoutsScreen() {
             <View style={styles.empty}>
               <Ionicons name="barbell-outline" size={48} color={colors.gray300} />
               <Text style={styles.emptyTitle}>No routines yet</Text>
-              <Text style={styles.emptyText}>Tap + to create your first routine (e.g. "Chest Day").</Text>
+              <Text style={styles.emptyText}>Tap + to create (e.g. "Chest Day", "Push Day").</Text>
             </View>
           }
         />
@@ -440,7 +441,7 @@ export default function WorkoutsScreen() {
             <View style={styles.empty}>
               <Ionicons name="fitness-outline" size={48} color={colors.gray300} />
               <Text style={styles.emptyTitle}>No exercises yet</Text>
-              <Text style={styles.emptyText}>Tap + to add exercises to your library.</Text>
+              <Text style={styles.emptyText}>Tap + to build your exercise library.</Text>
             </View>
           }
         />
@@ -452,7 +453,11 @@ export default function WorkoutsScreen() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Exercise</Text>
-              <TouchableOpacity onPress={() => { setExerciseModal(false); setExerciseForm(BLANK_EX); setLocalImageUri(null); }}>
+              <TouchableOpacity onPress={() => {
+                setExerciseModal(false);
+                setExerciseForm(BLANK_EX);
+                setLocalImageUri(null);
+              }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
@@ -476,7 +481,10 @@ export default function WorkoutsScreen() {
                   (url) => setExerciseForm((f) => ({ ...f, image_url: url })),
                   setUploadingImage,
                 )}
-                onRemove={() => { setLocalImageUri(null); setExerciseForm((f) => ({ ...f, image_url: '' })); }}
+                onRemove={() => {
+                  setLocalImageUri(null);
+                  setExerciseForm((f) => ({ ...f, image_url: '' }));
+                }}
               />
 
               <Text style={styles.fieldLabel}>Muscle Group</Text>
@@ -503,7 +511,7 @@ export default function WorkoutsScreen() {
               <Text style={styles.fieldLabel}>Coaching Cues</Text>
               <TextInput
                 style={[styles.textInput, { minHeight: 80, textAlignVertical: 'top' }]}
-                placeholder="e.g. Retract shoulder blades..."
+                placeholder="e.g. Retract shoulder blades, drive feet into floor..."
                 placeholderTextColor={colors.gray400}
                 value={exerciseForm.cues}
                 onChangeText={(v) => setExerciseForm((f) => ({ ...f, cues: v }))}
@@ -530,7 +538,11 @@ export default function WorkoutsScreen() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Exercise</Text>
-              <TouchableOpacity onPress={() => { setEditExModal(false); setEditingEx(null); setEditLocalImg(null); }}>
+              <TouchableOpacity onPress={() => {
+                setEditExModal(false);
+                setEditingEx(null);
+                setEditLocalImg(null);
+              }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
@@ -554,7 +566,10 @@ export default function WorkoutsScreen() {
                   (url) => setEditExForm((f) => ({ ...f, image_url: url })),
                   setEditUploadingImg,
                 )}
-                onRemove={() => { setEditLocalImg(null); setEditExForm((f) => ({ ...f, image_url: '' })); }}
+                onRemove={() => {
+                  setEditLocalImg(null);
+                  setEditExForm((f) => ({ ...f, image_url: '' }));
+                }}
               />
 
               <Text style={styles.fieldLabel}>Muscle Group</Text>
@@ -588,7 +603,6 @@ export default function WorkoutsScreen() {
                 multiline
               />
 
-              {/* Delete button */}
               <TouchableOpacity
                 style={styles.deleteBtn}
                 onPress={() => {
@@ -621,7 +635,10 @@ export default function WorkoutsScreen() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Routine</Text>
-              <TouchableOpacity onPress={() => { setPlanModal(false); setPlanForm({ title: '', goal_focus: '', client_id: '' }); }}>
+              <TouchableOpacity onPress={() => {
+                setPlanModal(false);
+                setPlanForm({ title: '', goal_focus: '', client_id: '' });
+              }}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
@@ -671,7 +688,7 @@ export default function WorkoutsScreen() {
               <View style={styles.infoBanner}>
                 <Ionicons name="information-circle-outline" size={16} color={colors.gray500} />
                 <Text style={styles.infoText}>
-                  After creating, you'll be taken to the routine editor to add exercises.
+                  After creating, you'll go straight to the editor to add exercises.
                 </Text>
               </View>
 
@@ -736,7 +753,6 @@ const styles = StyleSheet.create({
   empty:      { paddingVertical: spacing.xxxl * 2, alignItems: 'center', gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
   emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
-
   imageUploadBtn: {
     height: 120, borderWidth: 1.5, borderColor: colors.gray200, borderStyle: 'dashed',
     borderRadius: borderRadius.sm, alignItems: 'center', justifyContent: 'center',
@@ -746,14 +762,12 @@ const styles = StyleSheet.create({
   imageUploadTxt:  { fontSize: fontSize.sm, color: colors.gray400, marginTop: spacing.sm },
   removeImageBtn:  { marginTop: spacing.sm, alignSelf: 'flex-end' },
   removeImageTxt:  { fontSize: fontSize.sm, color: colors.red500, fontWeight: '500' },
-
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: spacing.sm, paddingVertical: spacing.md,
     backgroundColor: colors.red50, borderRadius: borderRadius.sm, marginTop: spacing.lg,
   },
   deleteBtnTxt: { fontSize: fontSize.sm, fontWeight: '600', color: colors.red700 },
-
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl,

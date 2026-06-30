@@ -1,5 +1,8 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity,
+  ScrollView, ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,30 +13,25 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 export default function SettingsScreen() {
   const { user, profile, logout } = useAuthStore();
   const router = useRouter();
-
-  const handleLogout = () => {
-    Alert.alert(
-      'Log out',
-      'Are you sure you want to log out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Log out',
-          style: 'destructive',
-          onPress: () => {
-            // Fire and forget — state clears synchronously in logout()
-            // then we navigate immediately
-            logout().catch(console.error);
-            // Navigate straight away — state is already cleared
-            router.replace('/login');
-          },
-        },
-      ],
-      { cancelable: true }
-    );
-  };
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const displayName = profile?.full_name ?? user?.email?.split('@')[0] ?? 'PT';
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await logout();
+      // Don't call router.replace here — _layout.tsx watches `user` state
+      // and will automatically redirect to /login when user becomes null.
+      // Calling router.replace here AND in _layout causes a race condition.
+    } catch (e) {
+      console.error('Logout error:', e);
+    } finally {
+      setLoggingOut(false);
+      setConfirmingLogout(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -61,14 +59,42 @@ export default function SettingsScreen() {
           </View>
         </Card>
 
-        {/* Logout */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color={colors.red500} />
-          <Text style={styles.logoutTxt}>Log out</Text>
-        </TouchableOpacity>
+        {/* Logout — inline confirmation instead of Alert (Alert is unreliable on web) */}
+        {!confirmingLogout ? (
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={() => setConfirmingLogout(true)}
+          >
+            <Ionicons name="log-out-outline" size={20} color={colors.red500} />
+            <Text style={styles.logoutTxt}>Log out</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmText}>Are you sure you want to log out?</Text>
+            <View style={styles.confirmBtns}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => setConfirmingLogout(false)}
+                disabled={loggingOut}
+              >
+                <Text style={styles.cancelBtnTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmLogoutBtn, loggingOut && { opacity: 0.6 }]}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                {loggingOut
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <Text style={styles.confirmLogoutBtnTxt}>Log out</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <Text style={styles.hint}>
-          💡 To test the client view, log out and sign in with a client account.
+          💡 To test the client view: log out, then open a{'\n'}
+          private/incognito window at localhost:8081
         </Text>
 
         <Text style={styles.version}>Maximum Fitness v1.0.0</Text>
@@ -102,13 +128,34 @@ const styles = StyleSheet.create({
   infoLabel:  { fontSize: fontSize.md, color: colors.gray700, flex: 1 },
   infoValue:  { fontSize: fontSize.sm, color: colors.gray400 },
 
-  logoutBtn:  {
+  logoutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: spacing.sm, paddingVertical: spacing.lg,
     backgroundColor: colors.red50, borderRadius: borderRadius.sm,
     marginBottom: spacing.lg,
   },
   logoutTxt:  { fontSize: fontSize.md, fontWeight: '600', color: colors.red500 },
+
+  confirmBox: {
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm,
+    padding: spacing.xl, marginBottom: spacing.lg,
+    borderWidth: 1, borderColor: colors.red500 + '40',
+  },
+  confirmText: {
+    fontSize: fontSize.md, fontWeight: '500', color: colors.gray800,
+    textAlign: 'center', marginBottom: spacing.lg,
+  },
+  confirmBtns: { flexDirection: 'row', gap: spacing.md },
+  cancelBtn: {
+    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center',
+  },
+  cancelBtnTxt: { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
+  confirmLogoutBtn: {
+    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
+    backgroundColor: colors.red500, alignItems: 'center',
+  },
+  confirmLogoutBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
 
   hint: {
     fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center',

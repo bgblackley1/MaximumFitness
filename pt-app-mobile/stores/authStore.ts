@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session } from '@supabase/supabase-js';
 import API from '../services/api';
 
@@ -125,13 +126,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    // Clear state immediately so UI responds instantly
+    // Step 1: Clear React state immediately (synchronous)
     set({ ...RESET_STATE });
+
+    // Step 2: Sign out from Supabase
     try {
-      // scope: 'local' clears this device only — faster and more reliable
       await supabase.auth.signOut({ scope: 'local' });
     } catch (e) {
       console.error('SignOut error (non-fatal):', e);
+    }
+
+    // Step 3: Belt-and-braces — manually clear all Supabase keys from storage
+    // This is the most reliable fix for the "logout doesn't stick on web" bug
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const supabaseKeys = keys.filter(
+        (k) => k.startsWith('sb-') || k.includes('supabase') || k.includes('auth-token')
+      );
+      if (supabaseKeys.length > 0) {
+        await AsyncStorage.multiRemove(supabaseKeys);
+      }
+    } catch (e) {
+      // Non-fatal — storage clear failure shouldn't block logout
+      console.error('Storage clear error (non-fatal):', e);
     }
   },
 }));
