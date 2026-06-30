@@ -1,3 +1,4 @@
+# app/routers/dashboard.py
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
@@ -8,7 +9,7 @@ from app.models.user import User
 from app.models.client import ClientProfile
 from app.models.booking import Booking
 from app.models.measurement import Measurement
-from app.models.payment import Subscription
+from app.models.payment import SessionPack          # ← was Subscription
 from app.middleware.auth import get_current_pt
 
 router = APIRouter()
@@ -40,7 +41,7 @@ async def get_dashboard(
 
     # Sessions this week
     week_start = today - timedelta(days=today.weekday())
-    week_end = week_start + timedelta(days=6)
+    week_end   = week_start + timedelta(days=6)
     result = await db.execute(
         select(func.count(Booking.id)).where(
             Booking.pt_id == pt.id,
@@ -50,6 +51,15 @@ async def get_dashboard(
         )
     )
     sessions_this_week = result.scalar() or 0
+
+    # Active session packs (replaces subscriptions)
+    result = await db.execute(
+        select(func.count(SessionPack.id)).where(
+            SessionPack.pt_id == pt.id,
+            SessionPack.status == "active",
+        )
+    )
+    active_packs = result.scalar() or 0
 
     # At risk clients (no measurement in 14+ days)
     cutoff = today - timedelta(days=14)
@@ -76,22 +86,22 @@ async def get_dashboard(
                 "last_measurement": str(last_measurement) if last_measurement else None,
             })
 
-    # Failed payments
+    # Clients with exhausted session packs
     result = await db.execute(
-        select(Subscription)
+        select(SessionPack)
         .join(ClientProfile)
         .where(
             ClientProfile.pt_id == pt.id,
-            Subscription.status == "past_due",
+            SessionPack.status == "exhausted",
         )
-        .options(selectinload(Subscription.client).selectinload(ClientProfile.user))
+        .options(selectinload(SessionPack.client).selectinload(ClientProfile.user))
     )
-    failed_subs = result.scalars().all()
-    for sub in failed_subs:
+    exhausted_packs = result.scalars().all()
+    for pack in exhausted_packs:
         at_risk.append({
-            "client_id": str(sub.client_id),
-            "client_name": sub.client.user.name,
-            "reason": "Payment past due",
+            "client_id": str(pack.client_id),
+            "client_name": pack.client.user.name,
+            "reason": f"Session pack exhausted: {pack.pack_name}",
         })
 
     return {
@@ -108,8 +118,9 @@ async def get_dashboard(
             for b in todays_bookings
         ],
         "stats": {
-            "active_clients": active_client_count,
+            "active_clients":    active_client_count,
             "sessions_this_week": sessions_this_week,
+            "active_packs":      active_packs,
         },
         "at_risk": at_risk,
     }

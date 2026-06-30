@@ -14,20 +14,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ─── DO NOT call config.set_main_option here ───────────────────────────────
-# config.set_main_option passes the URL through Python's configparser which
-# treats % as interpolation syntax — this crashes when the URL contains
-# percent-encoded characters like %2F or %2A.
-# Instead we pass settings.DATABASE_URL directly to every function below.
-# ────────────────────────────────────────────────────────────────────────────
-
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations without a live DB connection."""
     context.configure(
-        url=settings.DATABASE_URL,   # ← direct, bypasses configparser
+        url=settings.DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -43,10 +35,14 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations with a live async DB connection."""
     connectable = create_async_engine(
-        settings.DATABASE_URL,       # ← direct, bypasses configparser
+        settings.DATABASE_URL,
         poolclass=pool.NullPool,
+        # ← ADD THESE TWO LINES — fixes PgBouncer/Supabase pooler
+        connect_args={
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        },
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
