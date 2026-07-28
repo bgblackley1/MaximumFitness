@@ -105,6 +105,7 @@ class WorkoutPlanSummary(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
+class AssignPlanRequest(BaseModel):
+    client_ids: list[uuid.UUID]
 # Fix forward reference
 PlanExerciseResponse.model_rebuild()

@@ -82,10 +82,17 @@ async def create_client(
     db: AsyncSession = Depends(get_db),
 ):
     client_profile, temp_password = await client_service.create_client(
-        db, pt_id=pt.id, name=body.name, email=body.email,
-        age=body.age, sex=body.sex, height_cm=body.height_cm,
+        db, pt_id=pt.id,
+        name=body.name,
+        email=body.email,
+        phone=body.phone,                   # ← ADD
+        age=body.age,
+        sex=body.sex,
+        height_cm=body.height_cm,
         starting_weight_kg=body.starting_weight_kg,
-        goals=body.goals, injuries=body.injuries, notes=body.notes,
+        goals=body.goals,
+        injuries=body.injuries,
+        notes=body.notes,
     )
     return {
         "id": str(client_profile.id),

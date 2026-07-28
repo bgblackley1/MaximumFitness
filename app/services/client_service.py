@@ -63,6 +63,7 @@ class ClientService:
         pt_id: uuid.UUID,
         name: str,
         email: str,
+        phone: str | None = None,           # ← ADD
         age: int | None = None,
         sex: str | None = None,
         height_cm: float | None = None,
@@ -71,61 +72,70 @@ class ClientService:
         injuries: list | None = None,
         notes: str | None = None,
     ) -> tuple[ClientProfile, str]:
-        # 0. Check email not already in our DB
-        existing = await db.execute(select(User).where(User.email == email))
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="Email already registered")
+        # ... (existing duplicate checks) ...
 
-        # 1. Generate a secure temporary password
-        temp_password = secrets.token_urlsafe(12)
-
-        # 2. Create Supabase Auth user
-        # ← FIXED: pass full_name so the profiles trigger doesn't fail
-        try:
-            supabase_user = await supabase_admin.create_user(
-                email=email,
-                password=temp_password,
-                full_name=name,          # ← This is the fix
-            )
-            supabase_auth_id = supabase_user["id"]
-        except Exception as e:
-            error_str = str(e)
-            if "already been registered" in error_str or "already exists" in error_str:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Email already registered in auth system",
-                )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to create auth user: {error_str}",
-            )
-
-        # 3. Create User record in FastAPI DB
         user = User(
             email=email,
             name=name,
+            phone=phone,                    # ← ADD
             role="client",
             supabase_auth_id=supabase_auth_id,
         )
-        db.add(user)
-        await db.flush()
+            # 0. Check email not already in our DB
+            existing = await db.execute(select(User).where(User.email == email))
+            if existing.scalar_one_or_none():
+                raise HTTPException(status_code=409, detail="Email already registered")
 
-        # 4. Create ClientProfile
-        client_profile = ClientProfile(
-            user_id=user.id,
-            pt_id=pt_id,
-            age=age,
-            sex=sex,
-            height_cm=height_cm,
-            starting_weight_kg=starting_weight_kg,
-            goals=goals or [],
-            injuries=injuries or [],
-            notes=notes,
-        )
-        db.add(client_profile)
-        await db.flush()
+            # 1. Generate a secure temporary password
+            temp_password = secrets.token_urlsafe(12)
 
-        return client_profile, temp_password
+            # 2. Create Supabase Auth user
+            # ← FIXED: pass full_name so the profiles trigger doesn't fail
+            try:
+                supabase_user = await supabase_admin.create_user(
+                    email=email,
+                    password=temp_password,
+                    full_name=name,          # ← This is the fix
+                )
+                supabase_auth_id = supabase_user["id"]
+            except Exception as e:
+                error_str = str(e)
+                if "already been registered" in error_str or "already exists" in error_str:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Email already registered in auth system",
+                    )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create auth user: {error_str}",
+                )
+
+            # 3. Create User record in FastAPI DB
+            user = User(
+                email=email,
+                name=name,
+                role="client",
+                supabase_auth_id=supabase_auth_id,
+            )
+            db.add(user)
+            await db.flush()
+
+            # 4. Create ClientProfile
+            client_profile = ClientProfile(
+                user_id=user.id,
+                pt_id=pt_id,
+                age=age,
+                sex=sex,
+                height_cm=height_cm,
+                starting_weight_kg=starting_weight_kg,
+                goals=goals or [],
+                injuries=injuries or [],
+                notes=notes,
+            )
+            db.add(client_profile)
+            await db.flush()
+
+            return client_profile, temp_password
 
     @staticmethod
     async def update_client(

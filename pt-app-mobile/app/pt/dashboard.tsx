@@ -17,6 +17,8 @@ export default function DashboardScreen() {
   const router = useRouter();
   const [stats, setStats] = useState({ clients: 0, upcomingBookings: 0, activePackages: 0 });
   const [upcomingBookings, setUpcomingBookings] = useState<any[]>([]);
+  // ← Store clients so we can look up names in the booking cards
+  const [clients, setClients] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { loadData(); }, []);
@@ -29,12 +31,15 @@ export default function DashboardScreen() {
         API.get('/payments/session-packs'),
       ]);
 
-      const clients  = clientsRes.status === 'fulfilled'  ? clientsRes.value.data  : [];
-      const bookings = bookingsRes.status === 'fulfilled' ? bookingsRes.value.data : [];
-      const packs    = packsRes.status === 'fulfilled'    ? packsRes.value.data    : [];
+      const clientsList = clientsRes.status === 'fulfilled' ? clientsRes.value.data : [];
+      const bookings    = bookingsRes.status === 'fulfilled' ? bookingsRes.value.data : [];
+      const packs       = packsRes.status === 'fulfilled'   ? packsRes.value.data   : [];
+
+      // ← Store clients list in state
+      setClients(clientsList);
 
       setStats({
-        clients:         clients.filter((c: any) => c.status === 'active').length,
+        clients:         clientsList.filter((c: any) => c.status === 'active').length,
         upcomingBookings: bookings.filter((b: any) =>
           new Date(b.date) >= new Date(new Date().toDateString()) &&
           (b.status === 'booked' || b.status === 'confirmed')
@@ -57,6 +62,12 @@ export default function DashboardScreen() {
     setRefreshing(true);
     await loadData();
     setRefreshing(false);
+  };
+
+  // Look up client name from the stored clients list using client_id
+  const getClientName = (clientId: string): string => {
+    const found = clients.find((c: any) => c.id === clientId);
+    return found?.name ?? 'Unknown Client';
   };
 
   return (
@@ -135,6 +146,7 @@ export default function DashboardScreen() {
           upcomingBookings.map((booking) => (
             <Card key={booking.id} style={styles.bookingCard}>
               <View style={styles.bookingRow}>
+                {/* Date block */}
                 <View style={styles.bookingDate}>
                   <Text style={styles.bookingDay}>
                     {new Date(booking.date).getDate()}
@@ -143,13 +155,18 @@ export default function DashboardScreen() {
                     {new Date(booking.date).toLocaleDateString('en-GB', { month: 'short' })}
                   </Text>
                 </View>
+
+                {/* Client name + time */}
                 <View style={styles.bookingInfo}>
-                  <Text style={styles.bookingType}>{booking.type || 'Session'}</Text>
+                  {/* ← Client full name instead of session type */}
+                  <Text style={styles.bookingClientName}>
+                    {getClientName(booking.client_id)}
+                  </Text>
                   <Text style={styles.bookingTime}>
                     {booking.start_time?.slice(0, 5)} – {booking.end_time?.slice(0, 5)}
-                    {booking.location ? ` · ${booking.location}` : ''}
                   </Text>
                 </View>
+
                 <Badge
                   label={booking.status}
                   variant={booking.status === 'booked' ? 'active' : 'pending'}
@@ -190,7 +207,8 @@ const styles = StyleSheet.create({
   bookingDay:  { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
   bookingMonth:{ fontSize: fontSize.xs, color: colors.gray400, textTransform: 'uppercase' },
   bookingInfo: { flex: 1 },
-  bookingType: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  // ← Was bookingType — now shows client name prominently
+  bookingClientName: { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
   bookingTime: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
   emptyText:   { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 });

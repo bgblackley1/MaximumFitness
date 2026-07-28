@@ -14,6 +14,7 @@ from app.schemas.workout import (
     WorkoutPlanCreate,
     WorkoutPlanResponse,
     WorkoutPlanSummary,
+    AssignPlanRequest,          # ← ADD
 )
 from app.schemas.workout_log import WorkoutLogCreate, WorkoutLogSetCreate, WorkoutLogResponse
 
@@ -270,3 +271,79 @@ async def duplicate_plan(
 
     await db.flush()
     return {"message": "Plan duplicated", "plan_id": str(new_plan.id)}
+
+@router.post("/{plan_id}/assign")
+async def assign_plan_to_clients(
+    plan_id: uuid.UUID,
+    body: AssignPlanRequest,
+    pt: User = Depends(get_current_pt),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assign a plan to multiple clients by creating a copy for each."""
+    result = await db.execute(
+        select(WorkoutPlan)
+        .where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
+        .options(*load_plan_options())
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    created_ids = []
+    skipped = 0
+
+    for client_id in body.client_ids:
+        # Verify client belongs to this PT
+        cp_result = await db.execute(
+            select(ClientProfile).where(
+                ClientProfile.id == client_id,
+                ClientProfile.pt_id == pt.id,
+            )
+        )
+        if not cp_result.scalar_one_or_none():
+            skipped += 1
+            continue
+
+        new_plan = WorkoutPlan(
+            pt_id=pt.id,
+            client_id=client_id,
+            title=plan.title,
+            goal_focus=plan.goal_focus,
+            start_date=plan.start_date,
+            visibility=plan.visibility,
+            status="active",
+        )
+        db.add(new_plan)
+        await db.flush()
+
+        for week in plan.weeks:
+            new_week = PlanWeek(plan_id=new_plan.id, week_number=week.week_number)
+            db.add(new_week)
+            await db.flush()
+            for day in week.days:
+                new_day = PlanDay(
+                    week_id=new_week.id,
+                    day_label=day.day_label,
+                    day_order=day.day_order,
+                )
+                db.add(new_day)
+                await db.flush()
+                for ex in day.exercises:
+                    db.add(PlanExercise(
+                        day_id=new_day.id,
+                        exercise_id=ex.exercise_id,
+                        order=ex.order,
+                        sets=ex.sets,
+                        reps=ex.reps,
+                        rest_seconds=ex.rest_seconds,
+                        notes=ex.notes,
+                        progression_rule=ex.progression_rule,
+                    ))
+        await db.flush()
+        created_ids.append(str(new_plan.id))
+
+    return {
+        "message": f"Plan assigned to {len(created_ids)} client(s)",
+        "plan_ids": created_ids,
+        "skipped": skipped,
+    }
