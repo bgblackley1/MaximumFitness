@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, Modal, TextInput, Alert, ActivityIndicator,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,20 +13,145 @@ import Badge from '@/components/Badge';
 import LoadingScreen from '@/components/LoadingScreen';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
+// ── Constants: exact copy from add-client.tsx ─────────────────────────────────
+
+const HEALTH_GROUPS: { label: string; conditions: string[] }[] = [
+  { label: 'CV / Blood',       conditions: ['Hyper/Hypotension','Angina','Heart Attacks','Anaemia','Blood Clots','Varicose Veins'] },
+  { label: 'Respiratory',      conditions: ['Asthma','Respiratory Infections'] },
+  { label: 'Musculo-Skeletal', conditions: ['Joint Problems','Recent Fractures','Ligament Sprains','Muscle Strains'] },
+  { label: 'Nervous System',   conditions: ['Stroke','Sciatica','Sleep Disorders','Stress Issues'] },
+  { label: 'Endocrine',        conditions: ['Hypothyroidism','Hyperthyroidism','Diabetes Type 1','Diabetes Type 2'] },
+  { label: 'Digestive',        conditions: ["IBS","Digestive Intolerances","Crohn's Disease","Toileting Issues"] },
+  { label: 'Urinary',          conditions: ['Cystitis','Urinary Infections','Kidney Stones','Urination Issues'] },
+];
+
+const PLAN_TYPES = ['Monthly', 'Quarterly', '6 Month', 'Annual', 'Pay As You Go', 'Custom'];
+
 const FOCUS_LABELS: Record<string, string> = {
   arms: 'Arms', legs: 'Legs', push: 'Push', pull: 'Pull',
   back: 'Back', chest: 'Chest', core: 'Core', full_body: 'Full Body', cardio: 'Cardio',
 };
 
-const GOAL_PRESETS = [
-  'Lose Weight', 'Build Muscle', 'Improve Fitness', 'Increase Strength',
-  'Improve Flexibility', 'Sports Performance', 'Injury Recovery',
-  'General Health', 'Improve Endurance', 'Tone Up',
-];
+// ── Notes parser: extracts individual fields back out of the compiled notes ───
 
-const PLAN_TYPES = ['Monthly', 'Quarterly', 'Pay As You Go', '6 Month', 'Annual', 'Custom'];
+const getField = (notes: string, prefix: string): string => {
+  const m = notes.match(new RegExp(`^${prefix.replace(/[/]/g, '\\/')}:\\s*(.+)$`, 'm'));
+  return m ? m[1].trim() : '';
+};
 
-// ── Main Screen ──────────────────────────────────────────────────────────────
+const parseClientNotes = (notes: string) => {
+  if (!notes) {
+    return {
+      dob: '', phone: '', address: '',
+      drugHistory: '', smokingHistory: '', physicalAppearance: '',
+      selectedConditions: [] as string[],
+      employmentStatus: '', gymMembership: '', gymFrequency: '',
+      eatsOut: '', sportingBg: '', religiousBeliefs: '',
+      hasChildren: '', hasPets: '',
+      isVegetarian: '', dietRegimes: '', dietaryReligious: '',
+      allergies: '', dietaryIntolerances: '',
+    };
+  }
+
+  // Health conditions: single comma-separated line after section header
+  const condMatch = notes.match(/── HEALTH CONDITIONS ──\n([^\n─]+)/);
+  const selectedConditions: string[] = condMatch
+    ? condMatch[1].split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  // Gym membership (may have frequency in parens)
+  const gymMatch = notes.match(/Gym Membership:\s*(Yes|No)(?:\s*\((\d+)x per week\))?/);
+
+  return {
+    dob:                getField(notes, 'DOB'),
+    phone:              getField(notes, 'Phone'),
+    address:            getField(notes, 'Address'),
+    drugHistory:        getField(notes, 'Drug\\/Prescribed Meds'),
+    smokingHistory:     getField(notes, 'Smoking History'),
+    physicalAppearance: getField(notes, 'Physical Appearance'),
+    selectedConditions,
+    employmentStatus:   getField(notes, 'Employment'),
+    gymMembership:      gymMatch ? gymMatch[1] : '',
+    gymFrequency:       gymMatch && gymMatch[2] ? gymMatch[2] : '',
+    eatsOut:            getField(notes, 'Eats Out'),
+    sportingBg:         getField(notes, 'Sporting Background'),
+    religiousBeliefs:   getField(notes, 'Religious Beliefs'),
+    hasChildren:        getField(notes, 'Children'),
+    hasPets:            getField(notes, 'Pets'),
+    isVegetarian:       getField(notes, 'Vegetarian'),
+    dietRegimes:        getField(notes, 'Diet Regimes'),
+    dietaryReligious:   getField(notes, 'Dietary Religious Impact'),
+    allergies:          getField(notes, 'Allergies'),
+    dietaryIntolerances: getField(notes, 'Intolerances'),
+  };
+};
+
+// goals stored as ["Short term: ...", "Long term: ..."]
+const parseGoals = (goals: string[]) => ({
+  shortTerm: goals.find((g) => g.startsWith('Short term: '))?.replace('Short term: ', '') ?? '',
+  longTerm:  goals.find((g) => g.startsWith('Long term: '))?.replace('Long term: ', '') ?? '',
+});
+
+// ── ChipGroup: exact copy from add-client.tsx ─────────────────────────────────
+
+function ChipGroup<T extends string>({
+  options, value, onChange, multi = false,
+}: {
+  options: string[];
+  value: T | T[];
+  onChange: (v: any) => void;
+  multi?: boolean;
+}) {
+  const isSelected = (o: string) =>
+    multi ? (value as string[]).includes(o) : value === o;
+
+  const handlePress = (o: string) => {
+    if (multi) {
+      const arr = value as string[];
+      onChange(arr.includes(o) ? arr.filter((x) => x !== o) : [...arr, o]);
+    } else {
+      onChange(value === o ? '' : o);
+    }
+  };
+
+  return (
+    <View style={cg.row}>
+      {options.map((o) => (
+        <TouchableOpacity
+          key={o}
+          style={[cg.chip, isSelected(o) && cg.chipActive]}
+          onPress={() => handlePress(o)}
+          activeOpacity={0.7}
+        >
+          <Text style={[cg.chipTxt, isSelected(o) && cg.chipTxtActive]}>{o}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+const cg = StyleSheet.create({
+  row:          { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  chip:         { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full, borderWidth: 1.5, borderColor: colors.gray200, backgroundColor: colors.white },
+  chipActive:   { backgroundColor: colors.black, borderColor: colors.black },
+  chipTxt:      { fontSize: fontSize.sm, color: colors.gray600, fontWeight: '500' },
+  chipTxtActive:{ color: colors.white },
+});
+
+// ── Section header: exact style from add-client.tsx ───────────────────────────
+
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <View style={sec.wrap}>
+      <Text style={sec.title}>{title}</Text>
+    </View>
+  );
+}
+const sec = StyleSheet.create({
+  wrap:  { marginTop: spacing.xxl, marginBottom: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.gray200, paddingBottom: spacing.sm },
+  title: { fontSize: fontSize.sm, fontWeight: '700', color: colors.black, letterSpacing: 0.6, textTransform: 'uppercase' },
+});
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function ClientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,34 +165,52 @@ export default function ClientDetailScreen() {
   const [loading,          setLoading]          = useState(true);
   const [refreshing,       setRefreshing]       = useState(false);
 
-  // ── Edit client modal ──
+  // ── Edit modal state ── mirrors add-client.tsx form exactly ──────────────
   const [editModal,    setEditModal]    = useState(false);
   const [savingClient, setSavingClient] = useState(false);
-  const [editForm, setEditForm] = useState({
-    // Contact
-    name:  '',
-    phone: '',
-    // Physical
-    age:                '',
-    sex:                '',
-    height_cm:          '',
-    starting_weight_kg: '',
-    // Tags
-    goals:       [] as string[],
-    injuries:    [] as string[],
-    goalInput:   '',
-    injuryInput: '',
-    // Membership
-    status:    'active',
-    plan_type: '',
-    // Notes
-    notes: '',
-  });
 
-  // ── Goal status update ──
+  // Section 1: Basic Info
+  const [efName,    setEFName]    = useState('');
+  const [efSex,     setEFSex]     = useState('');
+  const [efDob,     setEFDob]     = useState('');
+  const [efAge,     setEFAge]     = useState('');
+  const [efPhone,   setEFPhone]   = useState('');
+  const [efAddress, setEFAddress] = useState('');
+  // Section 2: Historical
+  const [efDrugHistory,        setEFDrugHistory]        = useState('');
+  const [efSmokingHistory,     setEFSmokingHistory]     = useState('');
+  const [efPhysicalAppearance, setEFPhysicalAppearance] = useState('');
+  // Section 3: Health conditions (maps to injuries[])
+  const [efConditions, setEFConditions] = useState<string[]>([]);
+  // Section 4: Anthropometric
+  const [efHeightCm, setEFHeightCm] = useState('');
+  const [efWeightKg, setEFWeightKg] = useState('');
+  // Section 5: Socio-Economic
+  const [efEmployment,    setEFEmployment]    = useState('');
+  const [efGymMembership, setEFGymMembership] = useState('');
+  const [efGymFrequency,  setEFGymFrequency]  = useState('');
+  const [efEatsOut,       setEFEatsOut]       = useState('');
+  const [efSportingBg,    setEFSportingBg]    = useState('');
+  const [efReligious,     setEFReligious]     = useState('');
+  const [efChildren,      setEFChildren]      = useState('');
+  const [efPets,          setEFPets]          = useState('');
+  // Section 6: Goals (maps to goals[])
+  const [efShortGoals, setEFShortGoals] = useState('');
+  const [efLongGoals,  setEFLongGoals]  = useState('');
+  // Section 7: Dietary
+  const [efVegetarian,    setEFVegetarian]    = useState('');
+  const [efDietRegimes,   setEFDietRegimes]   = useState('');
+  const [efDietReligious, setEFDietReligious] = useState('');
+  const [efAllergies,     setEFAllergies]     = useState('');
+  const [efIntolerances,  setEFIntolerances]  = useState('');
+  // Additional (not in add-client but in DB)
+  const [efStatus,   setEFStatus]   = useState('active');
+  const [efPlanType, setEFPlanType] = useState('');
+
+  // ── Goal status update ────────────────────────────────────────────────────
   const [updatingGoal, setUpdatingGoal] = useState<string | null>(null);
 
-  // ── Measurement modal ──
+  // ── Measurement modal ─────────────────────────────────────────────────────
   const [mModal,  setMModal]  = useState(false);
   const [mSaving, setMSaving] = useState(false);
   const [mForm, setMForm] = useState({
@@ -75,15 +219,15 @@ export default function ClientDetailScreen() {
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
 
-  // ── Goal add modal ──
+  // ── Goal add modal ────────────────────────────────────────────────────────
   const [gModal,  setGModal]  = useState(false);
   const [gSaving, setGSaving] = useState(false);
   const [gForm, setGForm] = useState({
-    description: '', type: 'weight', target_value: '', target_unit: 'kg',
-    target_date: '', current_value: '',
+    description: '', type: 'weight', target_value: '',
+    target_unit: 'kg', target_date: '', current_value: '',
   });
 
-  // ── Workout assignment modal ──
+  // ── Workout assignment modal ──────────────────────────────────────────────
   const [workoutModal,       setWorkoutModal]       = useState(false);
   const [selectedWorkoutIds, setSelectedWorkoutIds] = useState<string[]>([]);
   const [savingWorkouts,     setSavingWorkouts]     = useState(false);
@@ -118,94 +262,142 @@ export default function ClientDetailScreen() {
     setRefreshing(false);
   };
 
-  // ✅ FIX: Use router.navigate to go to the clients TAB — reliable for hidden tab screens
-  const handleBack = () => {
-    router.navigate('/pt/clients' as any);
-  };
+  const handleBack = () => router.navigate('/pt/clients' as any);
 
-  // ── Open edit client modal ─────────────────────────────────────────────────
+  // ── Pre-populate edit form from existing client data ──────────────────────
   const openEditClient = () => {
     if (!client) return;
-    setEditForm({
-      name:               client.name   ?? '',
-      phone:              client.phone  ?? '',
-      age:                client.age    != null ? String(client.age)                : '',
-      sex:                client.sex    ?? '',
-      height_cm:          client.height_cm          != null ? String(client.height_cm)          : '',
-      starting_weight_kg: client.starting_weight_kg != null ? String(client.starting_weight_kg) : '',
-      goals:       Array.isArray(client.goals)    ? [...client.goals]    : [],
-      injuries:    Array.isArray(client.injuries) ? [...client.injuries] : [],
-      goalInput:   '',
-      injuryInput: '',
-      status:    client.status    ?? 'active',
-      plan_type: client.plan_type ?? '',
-      notes:     client.notes     ?? '',
-    });
+
+    const parsed = parseClientNotes(client.notes ?? '');
+    const { shortTerm, longTerm } = parseGoals(client.goals ?? []);
+
+    setEFName(client.name ?? '');
+    setEFSex(client.sex ?? '');
+    setEFDob(parsed.dob);
+    setEFAge(client.age != null ? String(client.age) : '');
+    // phone: prefer DB User.phone, fall back to parsed notes Phone field
+    setEFPhone(client.phone ?? parsed.phone ?? '');
+    setEFAddress(parsed.address);
+    setEFDrugHistory(parsed.drugHistory);
+    setEFSmokingHistory(parsed.smokingHistory);
+    setEFPhysicalAppearance(parsed.physicalAppearance);
+    // injuries[] stores the raw conditions from the health history checkboxes
+    setEFConditions(
+      Array.isArray(client.injuries) && client.injuries.length > 0
+        ? [...client.injuries]
+        : parsed.selectedConditions
+    );
+    setEFHeightCm(client.height_cm != null ? String(client.height_cm) : '');
+    setEFWeightKg(client.starting_weight_kg != null ? String(client.starting_weight_kg) : '');
+    setEFEmployment(parsed.employmentStatus);
+    setEFGymMembership(parsed.gymMembership);
+    setEFGymFrequency(parsed.gymFrequency);
+    setEFEatsOut(parsed.eatsOut);
+    setEFSportingBg(parsed.sportingBg);
+    setEFReligious(parsed.religiousBeliefs);
+    setEFChildren(parsed.hasChildren);
+    setEFPets(parsed.hasPets);
+    setEFShortGoals(shortTerm);
+    setEFLongGoals(longTerm);
+    setEFVegetarian(parsed.isVegetarian);
+    setEFDietRegimes(parsed.dietRegimes);
+    setEFDietReligious(parsed.dietaryReligious);
+    setEFAllergies(parsed.allergies);
+    setEFIntolerances(parsed.dietaryIntolerances);
+    setEFStatus(client.status ?? 'active');
+    setEFPlanType(client.plan_type ?? '');
+
     setEditModal(true);
   };
 
-  // ── Tag helpers ────────────────────────────────────────────────────────────
-  const addGoalTag = (tag: string) => {
-    const t = tag.trim();
-    if (!t || editForm.goals.includes(t)) return;
-    setEditForm((f) => ({ ...f, goals: [...f.goals, t], goalInput: '' }));
-  };
+  // ── Build notes string — exact same logic as add-client.tsx buildNotes() ──
+  const buildNotes = (): string => {
+    const lines: string[] = [];
 
-  const removeGoalTag = (tag: string) => {
-    setEditForm((f) => ({ ...f, goals: f.goals.filter((g) => g !== tag) }));
-  };
+    if (efDob)     lines.push(`DOB: ${efDob}`);
+    if (efPhone)   lines.push(`Phone: ${efPhone}`);
+    if (efAddress) lines.push(`Address: ${efAddress}`);
 
-  const toggleGoalPreset = (preset: string) => {
-    if (editForm.goals.includes(preset)) {
-      removeGoalTag(preset);
-    } else {
-      setEditForm((f) => ({ ...f, goals: [...f.goals, preset] }));
+    const hasHistory = efDrugHistory || efSmokingHistory || efPhysicalAppearance;
+    if (hasHistory) {
+      lines.push('', '── HISTORICAL INFORMATION ──');
+      if (efDrugHistory)        lines.push(`Drug/Prescribed Meds: ${efDrugHistory}`);
+      if (efSmokingHistory)     lines.push(`Smoking History: ${efSmokingHistory}`);
+      if (efPhysicalAppearance) lines.push(`Physical Appearance: ${efPhysicalAppearance}`);
     }
+
+    if (efConditions.length > 0) {
+      lines.push('', '── HEALTH CONDITIONS ──');
+      lines.push(efConditions.join(', '));
+    }
+
+    const hasSocio = efEmployment || efGymMembership || efEatsOut ||
+                     efSportingBg || efReligious || efChildren || efPets;
+    if (hasSocio) {
+      lines.push('', '── SOCIO-ECONOMIC ──');
+      if (efEmployment) lines.push(`Employment: ${efEmployment}`);
+      if (efGymMembership) {
+        const freq = efGymMembership === 'Yes' && efGymFrequency
+          ? ` (${efGymFrequency}x per week)` : '';
+        lines.push(`Gym Membership: ${efGymMembership}${freq}`);
+      }
+      if (efEatsOut)   lines.push(`Eats Out: ${efEatsOut}`);
+      if (efSportingBg) lines.push(`Sporting Background: ${efSportingBg}`);
+      if (efReligious)  lines.push(`Religious Beliefs: ${efReligious}`);
+      if (efChildren)   lines.push(`Children: ${efChildren}`);
+      if (efPets)       lines.push(`Pets: ${efPets}`);
+    }
+
+    const hasDietary = efVegetarian || efDietRegimes || efDietReligious ||
+                       efAllergies || efIntolerances;
+    if (hasDietary) {
+      lines.push('', '── DIETARY ──');
+      if (efVegetarian)    lines.push(`Vegetarian: ${efVegetarian}`);
+      if (efDietRegimes)   lines.push(`Diet Regimes: ${efDietRegimes}`);
+      if (efDietReligious) lines.push(`Dietary Religious Impact: ${efDietReligious}`);
+      if (efAllergies)     lines.push(`Allergies: ${efAllergies}`);
+      if (efIntolerances)  lines.push(`Intolerances: ${efIntolerances}`);
+    }
+
+    return lines.join('\n').trim();
   };
 
-  const addInjuryTag = (tag: string) => {
-    const t = tag.trim();
-    if (!t || editForm.injuries.includes(t)) return;
-    setEditForm((f) => ({ ...f, injuries: [...f.injuries, t], injuryInput: '' }));
-  };
-
-  const removeInjuryTag = (tag: string) => {
-    setEditForm((f) => ({ ...f, injuries: f.injuries.filter((i) => i !== tag) }));
-  };
-
-  // ── Save client ────────────────────────────────────────────────────────────
+  // ── Save edit ─────────────────────────────────────────────────────────────
   const handleSaveClient = async () => {
-    if (!editForm.name.trim()) {
-      Alert.alert('Error', 'Client name is required');
-      return;
-    }
+    if (!efName.trim()) { Alert.alert('Error', 'Name is required'); return; }
     setSavingClient(true);
     try {
-      const payload: any = {
-        name:     editForm.name.trim(),
-        goals:    editForm.goals,
-        injuries: editForm.injuries,
-        status:   editForm.status,
+      // Goals array — same format as add-client.tsx
+      const goalsArr: string[] = [];
+      if (efShortGoals) goalsArr.push(`Short term: ${efShortGoals}`);
+      if (efLongGoals)  goalsArr.push(`Long term: ${efLongGoals}`);
+
+      const payload: Record<string, any> = {
+        name:     efName.trim(),
+        goals:    goalsArr,
+        injuries: efConditions,        // health conditions → injuries[]
+        notes:    buildNotes() || null,
+        status:   efStatus,
       };
-      if (editForm.phone.trim())        payload.phone              = editForm.phone.trim();
-      if (editForm.age)                 payload.age                = parseInt(editForm.age);
-      if (editForm.sex)                 payload.sex                = editForm.sex;
-      if (editForm.height_cm)           payload.height_cm          = parseFloat(editForm.height_cm);
-      if (editForm.starting_weight_kg)  payload.starting_weight_kg = parseFloat(editForm.starting_weight_kg);
-      if (editForm.plan_type.trim())    payload.plan_type          = editForm.plan_type.trim();
-      payload.notes = editForm.notes.trim() || null;
+
+      if (efPhone.trim())   payload.phone              = efPhone.trim();
+      if (efAge)            payload.age                = parseInt(efAge);
+      if (efSex)            payload.sex                = efSex;
+      if (efHeightCm)       payload.height_cm          = parseFloat(efHeightCm);
+      if (efWeightKg)       payload.starting_weight_kg = parseFloat(efWeightKg);
+      if (efPlanType.trim()) payload.plan_type         = efPlanType.trim();
 
       const res = await API.put(`/clients/${id}`, payload);
       setClient((prev: any) => ({ ...prev, ...res.data }));
       setEditModal(false);
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to update client details');
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to update client');
     } finally {
       setSavingClient(false);
     }
   };
 
-  // ── Goal status update ─────────────────────────────────────────────────────
+  // ── Goal status update ────────────────────────────────────────────────────
   const updateGoalStatus = async (
     goalId: string,
     newStatus: 'achieved' | 'abandoned' | 'in_progress',
@@ -213,7 +405,7 @@ export default function ClientDetailScreen() {
     setUpdatingGoal(goalId);
     try {
       const res = await API.put(`/clients/${id}/goals/${goalId}`, { status: newStatus });
-      setGoals((prev) => prev.map((g) => g.id === goalId ? res.data : g));
+      setGoals((prev) => prev.map((g) => (g.id === goalId ? res.data : g)));
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.detail || 'Failed to update goal');
     } finally {
@@ -221,7 +413,7 @@ export default function ClientDetailScreen() {
     }
   };
 
-  // ── Save measurement ───────────────────────────────────────────────────────
+  // ── Measurement save ──────────────────────────────────────────────────────
   const saveMeasurement = async () => {
     if (!mForm.date) { Alert.alert('Error', 'Date is required'); return; }
     setMSaving(true);
@@ -236,17 +428,15 @@ export default function ClientDetailScreen() {
       const res = await API.post(`/clients/${id}/measurements`, payload);
       setMeasurements((prev) => [res.data, ...prev]);
       setMModal(false);
-      setMForm({
-        date: new Date().toISOString().split('T')[0],
-        weight_kg: '', chest_cm: '', waist_cm: '',
-        left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
-      });
+      setMForm({ date: new Date().toISOString().split('T')[0], weight_kg: '',
+        chest_cm: '', waist_cm: '', left_arm_cm: '', right_arm_cm: '',
+        thigh_cm: '', hips_cm: '', notes: '' });
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
     } finally { setMSaving(false); }
   };
 
-  // ── Save goal ──────────────────────────────────────────────────────────────
+  // ── Goal save ─────────────────────────────────────────────────────────────
   const saveGoal = async () => {
     if (!gForm.description || !gForm.target_value) {
       Alert.alert('Error', 'Description and target value are required'); return;
@@ -262,29 +452,26 @@ export default function ClientDetailScreen() {
       const res = await API.post(`/clients/${id}/goals`, payload);
       setGoals((prev) => [res.data, ...prev]);
       setGModal(false);
-      setGForm({ description: '', type: 'weight', target_value: '', target_unit: 'kg', target_date: '', current_value: '' });
+      setGForm({ description: '', type: 'weight', target_value: '',
+        target_unit: 'kg', target_date: '', current_value: '' });
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
     } finally { setGSaving(false); }
   };
 
-  // ── Save workout assignments ───────────────────────────────────────────────
+  // ── Workout assignment ────────────────────────────────────────────────────
   const saveWorkoutAssignments = async () => {
     setSavingWorkouts(true);
     try {
-      await API.put(`/workout-plans/assignments/by-client/${id}`, { workout_ids: selectedWorkoutIds });
+      await API.put(`/workout-plans/assignments/by-client/${id}`,
+        { workout_ids: selectedWorkoutIds });
       const res = await API.get('/workout-plans', { params: { client_id: id } });
       setAssignedWorkouts(res.data);
       setWorkoutModal(false);
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to save workout assignments');
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
     } finally { setSavingWorkouts(false); }
   };
-
-  const toggleWorkout = (wid: string) =>
-    setSelectedWorkoutIds((prev) =>
-      prev.includes(wid) ? prev.filter((x) => x !== wid) : [...prev, wid]
-    );
 
   const openWorkoutModal = () => {
     setSelectedWorkoutIds(assignedWorkouts.map((w) => w.id));
@@ -294,9 +481,6 @@ export default function ClientDetailScreen() {
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
-  const statusBadgeVariant = (s: string) =>
-    s === 'achieved' ? 'active' : s === 'abandoned' ? 'danger' : 'pending';
-
   if (loading) return <LoadingScreen />;
   if (!client) {
     return (
@@ -305,6 +489,9 @@ export default function ClientDetailScreen() {
       </SafeAreaView>
     );
   }
+
+  // Display goals that are the short/long-term strings
+  const { shortTerm: displayShort, longTerm: displayLong } = parseGoals(client.goals ?? []);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -332,9 +519,7 @@ export default function ClientDetailScreen() {
             <View style={styles.profileInfo}>
               <Text style={styles.clientName}>{client.name}</Text>
               <Text style={styles.clientEmail}>{client.email}</Text>
-              {client.phone ? (
-                <Text style={styles.clientPhone}>{client.phone}</Text>
-              ) : null}
+              {client.phone ? <Text style={styles.clientPhone}>{client.phone}</Text> : null}
             </View>
             <Badge
               label={client.status || 'active'}
@@ -342,12 +527,12 @@ export default function ClientDetailScreen() {
             />
           </View>
 
-          {/* Stats row */}
+          {/* Quick stats row */}
           <View style={styles.statsRow}>
             {[
-              { label: 'Age',    value: client.age           ? `${client.age}`           : '—' },
-              { label: 'Sex',    value: client.sex           ?? '—'                           },
-              { label: 'Height', value: client.height_cm     ? `${client.height_cm}cm`   : '—' },
+              { label: 'Age',    value: client.age        ? `${client.age}`           : '—' },
+              { label: 'Sex',    value: client.sex        ?? '—'                           },
+              { label: 'Height', value: client.height_cm  ? `${client.height_cm}cm`   : '—' },
               { label: 'Weight', value: client.starting_weight_kg ? `${client.starting_weight_kg}kg` : '—' },
             ].map((s) => (
               <View key={s.label} style={styles.statItem}>
@@ -361,28 +546,23 @@ export default function ClientDetailScreen() {
           {client.plan_type ? (
             <View style={styles.planRow}>
               <Ionicons name="card-outline" size={14} color={colors.gray500} />
-              <Text style={styles.planTxt}>{client.plan_type} plan</Text>
+              <Text style={styles.planTxt}>{client.plan_type}</Text>
             </View>
           ) : null}
 
-          {/* Profile goals (JSONB tags) */}
-          {client.goals?.length > 0 ? (
-            <View style={styles.tagsSection}>
-              <Text style={styles.tagsTitle}>Goals</Text>
-              <View style={styles.tagsWrap}>
-                {client.goals.map((g: string) => (
-                  <View key={g} style={styles.goalTag}>
-                    <Text style={styles.goalTagTxt}>{g}</Text>
-                  </View>
-                ))}
-              </View>
+          {/* Goals summary */}
+          {(displayShort || displayLong) && (
+            <View style={styles.goalsSummary}>
+              <Text style={styles.goalsSummaryLabel}>GOALS</Text>
+              {displayShort ? <Text style={styles.goalsSummaryItem}>• Short term: {displayShort}</Text> : null}
+              {displayLong  ? <Text style={styles.goalsSummaryItem}>• Long term: {displayLong}</Text>  : null}
             </View>
-          ) : null}
+          )}
 
-          {/* Injuries / Medical */}
-          {client.injuries?.length > 0 ? (
+          {/* Injuries / Health conditions */}
+          {client.injuries?.length > 0 && (
             <View style={styles.tagsSection}>
-              <Text style={styles.tagsTitle}>Medical / Injuries</Text>
+              <Text style={styles.tagsLabel}>HEALTH CONDITIONS</Text>
               <View style={styles.tagsWrap}>
                 {client.injuries.map((inj: string) => (
                   <View key={inj} style={styles.injuryTag}>
@@ -391,17 +571,9 @@ export default function ClientDetailScreen() {
                 ))}
               </View>
             </View>
-          ) : null}
+          )}
 
-          {/* Notes */}
-          {client.notes ? (
-            <View style={styles.notesSection}>
-              <Text style={styles.notesLabel}>Trainer Notes</Text>
-              <Text style={styles.notesText}>{client.notes}</Text>
-            </View>
-          ) : null}
-
-          {/* Edit details button */}
+          {/* Edit button */}
           <TouchableOpacity style={styles.editDetailsBtn} onPress={openEditClient}>
             <Ionicons name="create-outline" size={15} color={colors.gray600} />
             <Text style={styles.editDetailsBtnTxt}>Edit All Client Details</Text>
@@ -453,7 +625,7 @@ export default function ClientDetailScreen() {
           </View>
         )}
 
-        {/* ── Goals (Goal model) ── */}
+        {/* ── Progress Goals ── */}
         <View style={[styles.sectionHeader, { marginTop: spacing.xl }]}>
           <Text style={styles.sectionTitle}>Progress Goals</Text>
           <TouchableOpacity style={styles.addIcon} onPress={() => setGModal(true)}>
@@ -468,37 +640,31 @@ export default function ClientDetailScreen() {
             const isUpdating = updatingGoal === goal.id;
             const canAct     = goal.status === 'in_progress';
             const progress   =
-              goal.current_value != null && goal.target_value && goal.target_value > 0
+              goal.current_value != null && goal.target_value > 0
                 ? Math.min((goal.current_value / goal.target_value) * 100, 100)
                 : null;
 
             return (
               <Card key={goal.id} style={styles.goalCard}>
-                {/* Goal header */}
                 <View style={styles.goalRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.goalDesc}>{goal.description}</Text>
                     <Text style={styles.goalMeta}>
                       Target: {goal.target_value} {goal.target_unit}
-                      {goal.current_value != null
-                        ? ` · Current: ${goal.current_value} ${goal.target_unit}` : ''}
+                      {goal.current_value != null ? ` · Current: ${goal.current_value} ${goal.target_unit}` : ''}
                       {goal.target_date ? ` · Due: ${fmtDate(goal.target_date)}` : ''}
                     </Text>
                   </View>
                   <Badge
                     label={goal.status.replace('_', ' ')}
-                    variant={statusBadgeVariant(goal.status)}
+                    variant={goal.status === 'achieved' ? 'active' : goal.status === 'abandoned' ? 'danger' : 'pending'}
                   />
                 </View>
-
-                {/* Progress bar for in_progress goals */}
                 {progress !== null && canAct && (
                   <View style={styles.goalProgressBar}>
                     <View style={[styles.goalProgressFill, { width: `${progress}%` as any }]} />
                   </View>
                 )}
-
-                {/* ✅ NEW: Goal action buttons */}
                 {isUpdating ? (
                   <ActivityIndicator color={colors.black} style={{ marginTop: spacing.md }} />
                 ) : canAct ? (
@@ -519,7 +685,6 @@ export default function ClientDetailScreen() {
                     </TouchableOpacity>
                   </View>
                 ) : (
-                  /* Re-open achieved/abandoned goals */
                   <TouchableOpacity
                     style={styles.goalReopenBtn}
                     onPress={() => updateGoalStatus(goal.id, 'in_progress')}
@@ -549,13 +714,13 @@ export default function ClientDetailScreen() {
               <Text style={styles.measureDate}>{fmtDate(m.date)}</Text>
               <View style={styles.metricsRow}>
                 {[
-                  { label: 'Weight',  value: m.weight_kg,    unit: 'kg' },
-                  { label: 'Chest',   value: m.chest_cm,     unit: 'cm' },
-                  { label: 'Waist',   value: m.waist_cm,     unit: 'cm' },
-                  { label: 'L. Arm',  value: m.left_arm_cm,  unit: 'cm' },
-                  { label: 'R. Arm',  value: m.right_arm_cm, unit: 'cm' },
-                  { label: 'Thigh',   value: m.thigh_cm,     unit: 'cm' },
-                  { label: 'Hips',    value: m.hips_cm,      unit: 'cm' },
+                  { label: 'Weight', value: m.weight_kg,    unit: 'kg' },
+                  { label: 'Chest',  value: m.chest_cm,     unit: 'cm' },
+                  { label: 'Waist',  value: m.waist_cm,     unit: 'cm' },
+                  { label: 'L. Arm', value: m.left_arm_cm,  unit: 'cm' },
+                  { label: 'R. Arm', value: m.right_arm_cm, unit: 'cm' },
+                  { label: 'Thigh',  value: m.thigh_cm,     unit: 'cm' },
+                  { label: 'Hips',   value: m.hips_cm,      unit: 'cm' },
                 ].filter((r) => r.value != null).map((r) => (
                   <View key={r.label} style={styles.metricItem}>
                     <Text style={styles.metricLabel}>{r.label}</Text>
@@ -569,288 +734,371 @@ export default function ClientDetailScreen() {
         )}
       </ScrollView>
 
-      {/* ════════════════════════════════════════════════════════════════════
-          EDIT CLIENT MODAL — Full client info form
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* ═══════════════════════════════════════════════════════════════════════
+          EDIT CLIENT MODAL — exact same sections as add-client.tsx
+      ════════════════════════════════════════════════════════════════════════ */}
       <Modal visible={editModal} transparent animationType="slide">
-        <View style={styles.overlay}>
-          <View style={styles.modalBox}>
-            <View style={styles.modalHead}>
-              <Text style={styles.modalTitle}>Edit Client Details</Text>
-              <TouchableOpacity onPress={() => setEditModal(false)}>
-                <Ionicons name="close" size={24} color={colors.gray600} />
-              </TouchableOpacity>
-            </View>
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            style={styles.modalKAV}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.modalBox}>
+              {/* Header */}
+              <View style={styles.modalHead}>
+                <Text style={styles.modalTitle}>Edit Client Details</Text>
+                <TouchableOpacity onPress={() => setEditModal(false)}>
+                  <Ionicons name="close" size={24} color={colors.gray600} />
+                </TouchableOpacity>
+              </View>
 
-            <ScrollView
-              style={styles.modalBody}
-              contentContainerStyle={{ paddingBottom: spacing.xxxl + 20 }}
-              keyboardShouldPersistTaps="handled"
-            >
+              <ScrollView
+                style={styles.modalBody}
+                contentContainerStyle={{ paddingBottom: 60 }}
+                keyboardShouldPersistTaps="handled"
+              >
 
-              {/* ── CONTACT DETAILS ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Contact Details</Text>
+                {/* ══ 1. BASIC INFORMATION ════════════════════════════════ */}
+                <SectionHeader title="Client's Basic Information" />
 
-                <Text style={styles.fieldLabel}>Full Name *</Text>
+                <Text style={styles.fieldLabel}>Full Name <Text style={styles.req}>*</Text></Text>
                 <TextInput
                   style={styles.input}
-                  value={editForm.name}
-                  onChangeText={(v) => setEditForm((f) => ({ ...f, name: v }))}
-                  placeholder="Client's full name"
+                  value={efName}
+                  onChangeText={setEFName}
+                  placeholder="First and last name"
                   placeholderTextColor={colors.gray400}
-                  autoFocus
                 />
 
-                <Text style={styles.fieldLabel}>Phone Number</Text>
+                <Text style={styles.fieldLabel}>Sex</Text>
+                <ChipGroup
+                  options={['Male', 'Female', 'Other', 'Prefer not to say']}
+                  value={efSex}
+                  onChange={setEFSex}
+                />
+
+                <View style={styles.row2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Date of Birth</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={efDob}
+                      onChangeText={setEFDob}
+                      placeholder="DD/MM/YYYY"
+                      placeholderTextColor={colors.gray400}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Age</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={efAge}
+                      onChangeText={setEFAge}
+                      placeholder="e.g. 32"
+                      placeholderTextColor={colors.gray400}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.fieldLabel}>Contact Email</Text>
+                <View style={styles.readonlyField}>
+                  <Text style={styles.readonlyTxt}>{client.email}</Text>
+                </View>
+                <Text style={styles.hintTxt}>Email cannot be changed after account creation.</Text>
+
+                <Text style={styles.fieldLabel}>Contact Phone Number</Text>
                 <TextInput
                   style={styles.input}
-                  value={editForm.phone}
-                  onChangeText={(v) => setEditForm((f) => ({ ...f, phone: v }))}
-                  placeholder="e.g. 07700 900123"
+                  value={efPhone}
+                  onChangeText={setEFPhone}
+                  placeholder="07xxx xxxxxx"
                   placeholderTextColor={colors.gray400}
                   keyboardType="phone-pad"
                 />
 
-                <Text style={styles.fieldLabel}>Email</Text>
-                <View style={styles.readonlyField}>
-                  <Text style={styles.readonlyTxt}>{client.email}</Text>
-                </View>
-                <Text style={styles.fieldHint}>Email cannot be changed after account creation.</Text>
-              </View>
+                <Text style={styles.fieldLabel}>Home Address</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+                  value={efAddress}
+                  onChangeText={setEFAddress}
+                  placeholder="Street, City, Postcode"
+                  placeholderTextColor={colors.gray400}
+                  multiline
+                  numberOfLines={2}
+                />
 
-              {/* ── PHYSICAL STATS ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Physical Stats</Text>
+                {/* ══ 2. HISTORICAL INFORMATION ════════════════════════════ */}
+                <SectionHeader title="Historical Information" />
 
-                <Text style={styles.fieldLabel}>Sex / Gender</Text>
-                <View style={styles.chipRow}>
-                  {['Male', 'Female', 'Non-Binary', 'Prefer Not to Say'].map((s) => {
-                    const val = s.toLowerCase().replace(/ /g, '-');
-                    return (
-                      <TouchableOpacity
-                        key={s}
-                        style={[styles.chip, editForm.sex === val && styles.chipActive]}
-                        onPress={() => setEditForm((f) => ({ ...f, sex: f.sex === val ? '' : val }))}
-                      >
-                        <Text style={[styles.chipTxt, editForm.sex === val && { color: colors.white }]}>
-                          {s}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                <Text style={styles.fieldLabel}>Drug History / Prescribed Medications</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+                  value={efDrugHistory}
+                  onChangeText={setEFDrugHistory}
+                  placeholder="List any medications (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={3}
+                />
 
-                <View style={styles.twoColRow}>
-                  <View style={styles.twoColItem}>
-                    <Text style={styles.fieldLabel}>Age</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={editForm.age}
-                      onChangeText={(v) => setEditForm((f) => ({ ...f, age: v }))}
-                      placeholder="e.g. 28"
-                      placeholderTextColor={colors.gray400}
-                      keyboardType="number-pad"
+                <Text style={styles.fieldLabel}>Smoking History</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efSmokingHistory}
+                  onChangeText={setEFSmokingHistory}
+                  placeholder="Current smoker / Ex-smoker / Non-smoker (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                <Text style={styles.fieldLabel}>Physical Appearance</Text>
+                <ChipGroup
+                  options={['Healthy', 'Malnourished', 'Under-Nourished', 'Over-Nourished']}
+                  value={efPhysicalAppearance}
+                  onChange={setEFPhysicalAppearance}
+                />
+
+                {/* ══ 3. HEALTH HISTORY ════════════════════════════════════ */}
+                <SectionHeader title="Health History" />
+                <Text style={styles.hintTxt}>Tap to select all that apply</Text>
+
+                {HEALTH_GROUPS.map((group) => (
+                  <View key={group.label}>
+                    <Text style={styles.condGroupLabel}>{group.label}</Text>
+                    <ChipGroup
+                      options={group.conditions}
+                      value={efConditions}
+                      onChange={setEFConditions}
+                      multi
                     />
                   </View>
-                  <View style={styles.twoColItem}>
+                ))}
+
+                {/* ══ 4. ANTHROPOMETRIC TESTS ══════════════════════════════ */}
+                <SectionHeader title="Anthropometric Tests" />
+
+                <View style={styles.row2}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Height (cm)</Text>
                     <TextInput
                       style={styles.input}
-                      value={editForm.height_cm}
-                      onChangeText={(v) => setEditForm((f) => ({ ...f, height_cm: v }))}
+                      value={efHeightCm}
+                      onChangeText={setEFHeightCm}
                       placeholder="e.g. 175"
+                      placeholderTextColor={colors.gray400}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Weight (kg)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={efWeightKg}
+                      onChangeText={setEFWeightKg}
+                      placeholder="e.g. 80"
                       placeholderTextColor={colors.gray400}
                       keyboardType="decimal-pad"
                     />
                   </View>
                 </View>
 
-                <Text style={styles.fieldLabel}>Starting Weight (kg)</Text>
+                {/* ══ 5. SOCIO-ECONOMIC HISTORY ════════════════════════════ */}
+                <SectionHeader title="Socio-Economic History" />
+
+                <Text style={styles.fieldLabel}>Employment Status</Text>
+                <ChipGroup
+                  options={['Employed', 'Part Time', 'Self Employed', 'Unemployed', 'Student', 'Retired']}
+                  value={efEmployment}
+                  onChange={setEFEmployment}
+                />
+
+                <Text style={styles.fieldLabel}>Do you have a gym membership?</Text>
+                <ChipGroup
+                  options={['Yes', 'No']}
+                  value={efGymMembership}
+                  onChange={setEFGymMembership}
+                />
+
+                {efGymMembership === 'Yes' && (
+                  <>
+                    <Text style={styles.fieldLabel}>How many times per week?</Text>
+                    <ChipGroup
+                      options={['1', '2', '3', '4', '5', '6', '7']}
+                      value={efGymFrequency}
+                      onChange={setEFGymFrequency}
+                    />
+                  </>
+                )}
+
+                <Text style={styles.fieldLabel}>Do you eat out often?</Text>
+                <ChipGroup
+                  options={['Once a week', 'Multiple times a week', 'Every day', 'Rarely']}
+                  value={efEatsOut}
+                  onChange={setEFEatsOut}
+                />
+
+                <Text style={styles.fieldLabel}>Sporting Background</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efSportingBg}
+                  onChangeText={setEFSportingBg}
+                  placeholder="Sport(s) played (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                <Text style={styles.fieldLabel}>Religious Beliefs</Text>
                 <TextInput
                   style={styles.input}
-                  value={editForm.starting_weight_kg}
-                  onChangeText={(v) => setEditForm((f) => ({ ...f, starting_weight_kg: v }))}
-                  placeholder="e.g. 85"
+                  value={efReligious}
+                  onChangeText={setEFReligious}
+                  placeholder="If not applicable, state N/A"
                   placeholderTextColor={colors.gray400}
-                  keyboardType="decimal-pad"
                 />
-              </View>
 
-              {/* ── FITNESS GOALS (tags) ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Fitness Goals</Text>
-                <Text style={styles.fieldHint}>
-                  Tap a preset or type your own below.
-                </Text>
-
-                {/* Preset chips */}
-                <View style={styles.chipRow}>
-                  {GOAL_PRESETS.map((preset) => (
-                    <TouchableOpacity
-                      key={preset}
-                      style={[styles.chip, editForm.goals.includes(preset) && styles.chipActive]}
-                      onPress={() => toggleGoalPreset(preset)}
-                    >
-                      <Text style={[styles.chipTxt, editForm.goals.includes(preset) && { color: colors.white }]}>
-                        {preset}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Custom goal input */}
-                <View style={styles.tagInputRow}>
-                  <TextInput
-                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                    value={editForm.goalInput}
-                    onChangeText={(v) => setEditForm((f) => ({ ...f, goalInput: v }))}
-                    placeholder="Add custom goal..."
-                    placeholderTextColor={colors.gray400}
-                    onSubmitEditing={() => addGoalTag(editForm.goalInput)}
-                    returnKeyType="done"
-                  />
-                  <TouchableOpacity
-                    style={styles.tagAddBtn}
-                    onPress={() => addGoalTag(editForm.goalInput)}
-                  >
-                    <Ionicons name="add" size={20} color={colors.white} />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Selected tags */}
-                {editForm.goals.length > 0 && (
-                  <View style={styles.selectedTags}>
-                    {editForm.goals.map((g) => (
-                      <TouchableOpacity
-                        key={g}
-                        style={styles.removableTag}
-                        onPress={() => removeGoalTag(g)}
-                      >
-                        <Text style={styles.removableTagTxt}>{g}</Text>
-                        <Ionicons name="close" size={12} color={colors.gray600} />
-                      </TouchableOpacity>
-                    ))}
+                <View style={styles.row2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Any Children?</Text>
+                    <ChipGroup
+                      options={['Yes', 'No']}
+                      value={efChildren}
+                      onChange={setEFChildren}
+                    />
                   </View>
-                )}
-              </View>
-
-              {/* ── MEDICAL / INJURIES ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Medical Conditions & Injuries</Text>
-                <Text style={styles.fieldHint}>
-                  Add any conditions, injuries or restrictions the PT should know about.
-                </Text>
-
-                <View style={styles.tagInputRow}>
-                  <TextInput
-                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                    value={editForm.injuryInput}
-                    onChangeText={(v) => setEditForm((f) => ({ ...f, injuryInput: v }))}
-                    placeholder="e.g. Bad knee, Lower back pain"
-                    placeholderTextColor={colors.gray400}
-                    onSubmitEditing={() => addInjuryTag(editForm.injuryInput)}
-                    returnKeyType="done"
-                  />
-                  <TouchableOpacity
-                    style={styles.tagAddBtn}
-                    onPress={() => addInjuryTag(editForm.injuryInput)}
-                  >
-                    <Ionicons name="add" size={20} color={colors.white} />
-                  </TouchableOpacity>
-                </View>
-
-                {editForm.injuries.length > 0 ? (
-                  <View style={styles.selectedTags}>
-                    {editForm.injuries.map((inj) => (
-                      <TouchableOpacity
-                        key={inj}
-                        style={[styles.removableTag, styles.removableTagRed]}
-                        onPress={() => removeInjuryTag(inj)}
-                      >
-                        <Text style={[styles.removableTagTxt, { color: colors.red700 }]}>{inj}</Text>
-                        <Ionicons name="close" size={12} color={colors.red700} />
-                      </TouchableOpacity>
-                    ))}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Any Pets?</Text>
+                    <ChipGroup
+                      options={['Yes', 'No']}
+                      value={efPets}
+                      onChange={setEFPets}
+                    />
                   </View>
-                ) : (
-                  <Text style={styles.noTagsTxt}>No conditions added — tap + to add</Text>
-                )}
-              </View>
-
-              {/* ── MEMBERSHIP ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Membership</Text>
-
-                <Text style={styles.fieldLabel}>Status</Text>
-                <View style={styles.chipRow}>
-                  {['active', 'inactive', 'archived'].map((s) => (
-                    <TouchableOpacity
-                      key={s}
-                      style={[styles.chip, editForm.status === s && styles.chipActive]}
-                      onPress={() => setEditForm((f) => ({ ...f, status: s }))}
-                    >
-                      <Text style={[styles.chipTxt, editForm.status === s && { color: colors.white }]}>
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
                 </View>
+
+                {/* ══ 6. CLIENT GOALS ══════════════════════════════════════ */}
+                <SectionHeader title="Client Goals" />
+
+                <Text style={styles.fieldLabel}>Short Term Goals</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+                  value={efShortGoals}
+                  onChangeText={setEFShortGoals}
+                  placeholder="What do you want to achieve in the next 4–12 weeks?"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={3}
+                />
+
+                <Text style={styles.fieldLabel}>Long Term Goals</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+                  value={efLongGoals}
+                  onChangeText={setEFLongGoals}
+                  placeholder="What do you want to achieve in the next 6–12 months?"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={3}
+                />
+
+                {/* ══ 7. DIETARY HISTORY ═══════════════════════════════════ */}
+                <SectionHeader title="Dietary History" />
+
+                <Text style={styles.fieldLabel}>Are you vegetarian?</Text>
+                <ChipGroup
+                  options={['Yes', 'No']}
+                  value={efVegetarian}
+                  onChange={setEFVegetarian}
+                />
+
+                <Text style={styles.fieldLabel}>Do you follow any diet regimes?</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efDietRegimes}
+                  onChangeText={setEFDietRegimes}
+                  placeholder="e.g. Keto, Intermittent Fasting (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                <Text style={styles.fieldLabel}>Do your religious beliefs impact your diet?</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efDietReligious}
+                  onChangeText={setEFDietReligious}
+                  placeholder="If applicable, please clarify (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                <Text style={styles.fieldLabel}>Allergies</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efAllergies}
+                  onChangeText={setEFAllergies}
+                  placeholder="List allergies (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                <Text style={styles.fieldLabel}>Intolerances</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                  value={efIntolerances}
+                  onChangeText={setEFIntolerances}
+                  placeholder="e.g. Lactose, Gluten (or N/A)"
+                  placeholderTextColor={colors.gray400}
+                  multiline numberOfLines={2}
+                />
+
+                {/* ══ MEMBERSHIP / STATUS ══════════════════════════════════ */}
+                <SectionHeader title="Membership" />
+
+                <Text style={styles.fieldLabel}>Client Status</Text>
+                <ChipGroup
+                  options={['active', 'inactive', 'archived']}
+                  value={efStatus}
+                  onChange={setEFStatus}
+                />
 
                 <Text style={styles.fieldLabel}>Plan / Membership Type</Text>
-                <View style={styles.chipRow}>
+                <View style={cg.row}>
                   {PLAN_TYPES.map((pt) => (
                     <TouchableOpacity
                       key={pt}
-                      style={[styles.chip, editForm.plan_type === pt && styles.chipActive]}
-                      onPress={() => setEditForm((f) => ({ ...f, plan_type: f.plan_type === pt ? '' : pt }))}
+                      style={[cg.chip, efPlanType === pt && cg.chipActive]}
+                      onPress={() => setEFPlanType((prev) => prev === pt ? '' : pt)}
+                      activeOpacity={0.7}
                     >
-                      <Text style={[styles.chipTxt, editForm.plan_type === pt && { color: colors.white }]}>
-                        {pt}
-                      </Text>
+                      <Text style={[cg.chipTxt, efPlanType === pt && cg.chipTxtActive]}>{pt}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
                 <TextInput
                   style={[styles.input, { marginTop: spacing.sm }]}
-                  value={editForm.plan_type}
-                  onChangeText={(v) => setEditForm((f) => ({ ...f, plan_type: v }))}
+                  value={efPlanType}
+                  onChangeText={setEFPlanType}
                   placeholder="Or type a custom plan type..."
                   placeholderTextColor={colors.gray400}
                 />
-              </View>
 
-              {/* ── TRAINER NOTES ── */}
-              <View style={styles.formSection}>
-                <Text style={styles.formSectionTitle}>Trainer Notes</Text>
-                <TextInput
-                  style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }]}
-                  value={editForm.notes}
-                  onChangeText={(v) => setEditForm((f) => ({ ...f, notes: v }))}
-                  placeholder="Any additional notes about this client..."
-                  placeholderTextColor={colors.gray400}
-                  multiline
-                />
-              </View>
-
-              {/* Save button */}
-              <TouchableOpacity
-                style={[styles.saveBtn, savingClient && { opacity: 0.6 }]}
-                onPress={handleSaveClient}
-                disabled={savingClient}
-              >
-                {savingClient
-                  ? <ActivityIndicator color={colors.white} />
-                  : <Text style={styles.saveBtnTxt}>Save Client Details</Text>}
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
+                {/* ══ SAVE ═════════════════════════════════════════════════ */}
+                <TouchableOpacity
+                  style={[styles.saveBtn, savingClient && { opacity: 0.6 }]}
+                  onPress={handleSaveClient}
+                  disabled={savingClient}
+                >
+                  {savingClient
+                    ? <ActivityIndicator color={colors.white} />
+                    : <Text style={styles.saveBtnTxt}>Save Client Details</Text>}
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 
       {/* ── Workout Assignment Modal ── */}
       <Modal visible={workoutModal} transparent animationType="slide">
-        <View style={styles.overlay}>
+        <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
               <Text style={styles.modalTitle}>Assign Workouts</Text>
@@ -879,7 +1127,11 @@ export default function ClientDetailScreen() {
                     <TouchableOpacity
                       key={w.id}
                       style={[styles.workoutRow, isSelected && styles.workoutRowSelected]}
-                      onPress={() => toggleWorkout(w.id)}
+                      onPress={() =>
+                        setSelectedWorkoutIds((prev) =>
+                          prev.includes(w.id) ? prev.filter((x) => x !== w.id) : [...prev, w.id]
+                        )
+                      }
                       activeOpacity={0.7}
                     >
                       <View style={[styles.workoutRowAvatar, isSelected && { backgroundColor: colors.black }]}>
@@ -924,7 +1176,7 @@ export default function ClientDetailScreen() {
 
       {/* ── Add Measurement Modal ── */}
       <Modal visible={mModal} transparent animationType="slide">
-        <View style={styles.overlay}>
+        <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
               <Text style={styles.modalTitle}>Add Measurement</Text>
@@ -934,32 +1186,37 @@ export default function ClientDetailScreen() {
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
               <Text style={styles.fieldLabel}>Date</Text>
-              <TextInput style={styles.input} value={mForm.date} onChangeText={(v) => setMForm((f) => ({ ...f, date: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={colors.gray400} />
-              {[['Weight (kg)', 'weight_kg'], ['Chest (cm)', 'chest_cm'], ['Waist (cm)', 'waist_cm'],
-                ['L. Arm (cm)', 'left_arm_cm'], ['R. Arm (cm)', 'right_arm_cm'],
-                ['Thigh (cm)', 'thigh_cm'], ['Hips (cm)', 'hips_cm']].map(([label, key]) => (
+              <TextInput style={styles.input} value={mForm.date}
+                onChangeText={(v) => setMForm((f) => ({ ...f, date: v }))}
+                placeholder="YYYY-MM-DD" placeholderTextColor={colors.gray400} />
+              {[['Weight (kg)','weight_kg'],['Chest (cm)','chest_cm'],['Waist (cm)','waist_cm'],
+                ['L. Arm (cm)','left_arm_cm'],['R. Arm (cm)','right_arm_cm'],
+                ['Thigh (cm)','thigh_cm'],['Hips (cm)','hips_cm']].map(([label, key]) => (
                 <View key={key}>
                   <Text style={styles.fieldLabel}>{label}</Text>
                   <TextInput style={styles.input} value={(mForm as any)[key]}
                     onChangeText={(v) => setMForm((f) => ({ ...f, [key]: v }))}
-                    placeholder="Optional" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
+                    placeholder="Optional" placeholderTextColor={colors.gray400}
+                    keyboardType="decimal-pad" />
                 </View>
               ))}
               <Text style={styles.fieldLabel}>Notes</Text>
               <TextInput style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
                 value={mForm.notes} onChangeText={(v) => setMForm((f) => ({ ...f, notes: v }))}
                 placeholder="Optional" placeholderTextColor={colors.gray400} multiline />
-              <TouchableOpacity style={[styles.saveBtn, mSaving && { opacity: 0.6 }]} onPress={saveMeasurement} disabled={mSaving}>
-                {mSaving ? <ActivityIndicator color={colors.white} /> : <Text style={styles.saveBtnTxt}>Save Measurement</Text>}
+              <TouchableOpacity style={[styles.saveBtn, mSaving && { opacity: 0.6 }]}
+                onPress={saveMeasurement} disabled={mSaving}>
+                {mSaving ? <ActivityIndicator color={colors.white} />
+                  : <Text style={styles.saveBtnTxt}>Save Measurement</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
         </View>
       </Modal>
 
-      {/* ── Add Goal Modal ── */}
+      {/* ── Add Progress Goal Modal ── */}
       <Modal visible={gModal} transparent animationType="slide">
-        <View style={styles.overlay}>
+        <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
               <Text style={styles.modalTitle}>Add Progress Goal</Text>
@@ -968,32 +1225,46 @@ export default function ClientDetailScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-              <Text style={styles.fieldLabel}>Description *</Text>
-              <TextInput style={styles.input} value={gForm.description} onChangeText={(v) => setGForm((f) => ({ ...f, description: v }))} placeholder="e.g. Reach 80kg bodyweight" placeholderTextColor={colors.gray400} />
+              <Text style={styles.fieldLabel}>Description <Text style={styles.req}>*</Text></Text>
+              <TextInput style={styles.input} value={gForm.description}
+                onChangeText={(v) => setGForm((f) => ({ ...f, description: v }))}
+                placeholder="e.g. Reach 80kg bodyweight" placeholderTextColor={colors.gray400} />
               <Text style={styles.fieldLabel}>Type</Text>
-              <View style={styles.chipRow}>
+              <View style={cg.row}>
                 {['weight', 'strength', 'movement', 'custom'].map((t) => (
-                  <TouchableOpacity key={t} style={[styles.chip, gForm.type === t && styles.chipActive]} onPress={() => setGForm((f) => ({ ...f, type: t }))}>
-                    <Text style={[styles.chipTxt, gForm.type === t && { color: colors.white }]}>{t}</Text>
+                  <TouchableOpacity key={t}
+                    style={[cg.chip, gForm.type === t && cg.chipActive]}
+                    onPress={() => setGForm((f) => ({ ...f, type: t }))}>
+                    <Text style={[cg.chipTxt, gForm.type === t && cg.chipTxtActive]}>{t}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              <Text style={styles.fieldLabel}>Target Value *</Text>
-              <TextInput style={styles.input} value={gForm.target_value} onChangeText={(v) => setGForm((f) => ({ ...f, target_value: v }))} placeholder="e.g. 80" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
+              <Text style={styles.fieldLabel}>Target Value <Text style={styles.req}>*</Text></Text>
+              <TextInput style={styles.input} value={gForm.target_value}
+                onChangeText={(v) => setGForm((f) => ({ ...f, target_value: v }))}
+                placeholder="e.g. 80" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
               <Text style={styles.fieldLabel}>Unit</Text>
-              <View style={styles.chipRow}>
+              <View style={cg.row}>
                 {['kg', 'lbs', 'reps', 'mins', '%', 'other'].map((u) => (
-                  <TouchableOpacity key={u} style={[styles.chip, gForm.target_unit === u && styles.chipActive]} onPress={() => setGForm((f) => ({ ...f, target_unit: u }))}>
-                    <Text style={[styles.chipTxt, gForm.target_unit === u && { color: colors.white }]}>{u}</Text>
+                  <TouchableOpacity key={u}
+                    style={[cg.chip, gForm.target_unit === u && cg.chipActive]}
+                    onPress={() => setGForm((f) => ({ ...f, target_unit: u }))}>
+                    <Text style={[cg.chipTxt, gForm.target_unit === u && cg.chipTxtActive]}>{u}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <Text style={styles.fieldLabel}>Current Value (optional)</Text>
-              <TextInput style={styles.input} value={gForm.current_value} onChangeText={(v) => setGForm((f) => ({ ...f, current_value: v }))} placeholder="e.g. 90" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
+              <TextInput style={styles.input} value={gForm.current_value}
+                onChangeText={(v) => setGForm((f) => ({ ...f, current_value: v }))}
+                placeholder="e.g. 90" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
               <Text style={styles.fieldLabel}>Target Date (optional)</Text>
-              <TextInput style={styles.input} value={gForm.target_date} onChangeText={(v) => setGForm((f) => ({ ...f, target_date: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={colors.gray400} />
-              <TouchableOpacity style={[styles.saveBtn, gSaving && { opacity: 0.6 }]} onPress={saveGoal} disabled={gSaving}>
-                {gSaving ? <ActivityIndicator color={colors.white} /> : <Text style={styles.saveBtnTxt}>Save Goal</Text>}
+              <TextInput style={styles.input} value={gForm.target_date}
+                onChangeText={(v) => setGForm((f) => ({ ...f, target_date: v }))}
+                placeholder="YYYY-MM-DD" placeholderTextColor={colors.gray400} />
+              <TouchableOpacity style={[styles.saveBtn, gSaving && { opacity: 0.6 }]}
+                onPress={saveGoal} disabled={gSaving}>
+                {gSaving ? <ActivityIndicator color={colors.white} />
+                  : <Text style={styles.saveBtnTxt}>Save Goal</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1003,204 +1274,109 @@ export default function ClientDetailScreen() {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container:  { flex: 1, backgroundColor: colors.gray50 },
-  header:     {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-    backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray100,
-  },
-  backBtn:       { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerTitle:   { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  header:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
+  backBtn:    { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle:{ fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
   editHeaderBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   scroll:     { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
 
   // Profile card
   profileCard: { marginBottom: spacing.lg },
   profileTop:  { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.xl },
-  avatar:      {
-    width: 52, height: 52, borderRadius: borderRadius.full, backgroundColor: colors.black,
-    alignItems: 'center', justifyContent: 'center', marginRight: spacing.md, flexShrink: 0,
-  },
+  avatar:      { width: 52, height: 52, borderRadius: borderRadius.full, backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md, flexShrink: 0 },
   avatarText:  { color: colors.white, fontSize: fontSize.xl, fontWeight: '700' },
   profileInfo: { flex: 1 },
   clientName:  { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
   clientEmail: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
   clientPhone: { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  statsRow:    {
-    flexDirection: 'row', borderTopWidth: 1,
-    borderTopColor: colors.gray100, paddingTop: spacing.lg,
-  },
+  statsRow:    { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg },
   statItem:    { flex: 1, alignItems: 'center' },
   statLabel:   { fontSize: fontSize.xs, color: colors.gray400 },
   statValue:   { fontSize: fontSize.md, fontWeight: '600', color: colors.black, marginTop: 2 },
-  planRow:     {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    marginTop: spacing.md, paddingTop: spacing.md,
-    borderTopWidth: 1, borderTopColor: colors.gray100,
-  },
+  planRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.gray100 },
   planTxt:     { fontSize: fontSize.sm, color: colors.gray500 },
-  tagsSection: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.gray100 },
-  tagsTitle:   { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray400, letterSpacing: 0.6, marginBottom: spacing.sm },
+  goalsSummary: { borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md, marginTop: spacing.md },
+  goalsSummaryLabel: { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400, letterSpacing: 0.6, marginBottom: spacing.xs },
+  goalsSummaryItem:  { fontSize: fontSize.sm, color: colors.gray600, lineHeight: 20 },
+  tagsSection: { borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md, marginTop: spacing.md },
+  tagsLabel:   { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400, letterSpacing: 0.6, marginBottom: spacing.sm },
   tagsWrap:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  goalTag: {
-    backgroundColor: '#EFF6FF', paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs, borderRadius: borderRadius.full,
-  },
-  goalTagTxt: { fontSize: fontSize.xs, color: '#1D4ED8', fontWeight: '500' },
-  injuryTag: {
-    backgroundColor: colors.red50, paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs, borderRadius: borderRadius.full,
-  },
-  injuryTagTxt: { fontSize: fontSize.xs, color: colors.red700, fontWeight: '500' },
-  notesSection: {
-    borderTopWidth: 1, borderTopColor: colors.gray100,
-    paddingTop: spacing.lg, marginTop: spacing.lg,
-  },
-  notesLabel: { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs },
-  notesText:  { fontSize: fontSize.sm, color: colors.gray600, lineHeight: 20 },
-  editDetailsBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    justifyContent: 'center', marginTop: spacing.lg,
-    borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg,
-  },
+  injuryTag:   { backgroundColor: colors.red50, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs, borderRadius: borderRadius.full },
+  injuryTagTxt:{ fontSize: fontSize.xs, color: colors.red700, fontWeight: '500' },
+  editDetailsBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, justifyContent: 'center', marginTop: spacing.lg, borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg },
   editDetailsBtnTxt: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray600 },
 
-  // Section headers
-  sectionHeader: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'flex-start', marginBottom: spacing.md,
-  },
-  sectionTitle: { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
-  sectionSub:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
-  addIcon: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center',
-  },
-  manageBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.black, paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.sm + 1, borderRadius: borderRadius.sm,
-  },
-  manageBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
+  // Sections
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.md },
+  sectionTitle:  { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  sectionSub:    { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+  addIcon:       { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center' },
+  manageBtn:     { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.black, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.sm + 1, borderRadius: borderRadius.sm },
+  manageBtnTxt:  { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
 
-  // Workout grid
-  emptyWorkoutsCard: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl, marginBottom: spacing.lg },
-  emptyWorkoutsTxt:  { fontSize: fontSize.sm, color: colors.gray500 },
-  assignNowBtn:      { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.xs },
-  assignNowBtnTxt:   { color: colors.white, fontSize: fontSize.sm, fontWeight: '600' },
-  workoutGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
-  workoutCard:       { width: '47%', backgroundColor: colors.black, borderRadius: borderRadius.md, padding: spacing.lg, gap: spacing.xs },
-  workoutCardTitle:  { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
-  workoutFocusBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.full },
-  workoutFocusTxt:   { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.8)', fontWeight: '600', textTransform: 'capitalize' },
-  workoutExCount:    { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  // Workouts
+  emptyWorkoutsCard:  { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl, marginBottom: spacing.lg },
+  emptyWorkoutsTxt:   { fontSize: fontSize.sm, color: colors.gray500 },
+  assignNowBtn:       { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.xs },
+  assignNowBtnTxt:    { color: colors.white, fontSize: fontSize.sm, fontWeight: '600' },
+  workoutGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
+  workoutCard:        { width: '47%', backgroundColor: colors.black, borderRadius: borderRadius.md, padding: spacing.lg, gap: spacing.xs },
+  workoutCardTitle:   { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
+  workoutFocusBadge:  { alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.full },
+  workoutFocusTxt:    { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.8)', fontWeight: '600', textTransform: 'capitalize' },
+  workoutExCount:     { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
 
   // Goals
-  goalCard: { marginBottom: spacing.sm },
-  goalRow:  { flexDirection: 'row', alignItems: 'flex-start' },
-  goalDesc: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
-  goalMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 4, lineHeight: 18 },
-  goalProgressBar: {
-    height: 5, backgroundColor: colors.gray100, borderRadius: 3,
-    overflow: 'hidden', marginTop: spacing.sm, marginBottom: spacing.xs,
-  },
-  goalProgressFill: { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
-
-  // Goal action buttons
-  goalActions: {
-    flexDirection: 'row', gap: spacing.sm,
-    marginTop: spacing.md, paddingTop: spacing.md,
-    borderTopWidth: 1, borderTopColor: colors.gray100,
-  },
-  goalCompleteBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.green50, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm, borderRadius: borderRadius.full,
-    borderWidth: 1, borderColor: '#BBF7D0',
-  },
-  goalCompleteBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.green700 },
-  goalAbandonBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.gray100, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm, borderRadius: borderRadius.full,
-  },
+  goalCard:          { marginBottom: spacing.sm },
+  goalRow:           { flexDirection: 'row', alignItems: 'flex-start' },
+  goalDesc:          { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  goalMeta:          { fontSize: fontSize.sm, color: colors.gray400, marginTop: 4, lineHeight: 18 },
+  goalProgressBar:   { height: 5, backgroundColor: colors.gray100, borderRadius: 3, overflow: 'hidden', marginTop: spacing.sm },
+  goalProgressFill:  { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
+  goalActions:       { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.gray100 },
+  goalCompleteBtn:   { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.green50, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full, borderWidth: 1, borderColor: '#BBF7D0' },
+  goalCompleteBtnTxt:{ fontSize: fontSize.xs, fontWeight: '600', color: colors.green700 },
+  goalAbandonBtn:    { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.gray100, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full },
   goalAbandonBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray500 },
-  goalReopenBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    marginTop: spacing.md, paddingTop: spacing.md,
-    borderTopWidth: 1, borderTopColor: colors.gray100,
-    alignSelf: 'flex-start',
-  },
-  goalReopenBtnTxt: { fontSize: fontSize.xs, color: colors.gray400 },
+  goalReopenBtn:     { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.gray100, alignSelf: 'flex-start' },
+  goalReopenBtnTxt:  { fontSize: fontSize.xs, color: colors.gray400 },
 
   // Measurements
-  measureCard: { marginBottom: spacing.sm },
-  measureDate: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.sm },
-  metricsRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-  metricItem:  { minWidth: '28%' },
-  metricLabel: { fontSize: fontSize.xs, color: colors.gray400 },
-  metricValue: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
-  measureNotes:{ fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.sm, fontStyle: 'italic' },
-  emptyText:   { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
+  measureCard:  { marginBottom: spacing.sm },
+  measureDate:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.sm },
+  metricsRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  metricItem:   { minWidth: '28%' },
+  metricLabel:  { fontSize: fontSize.xs, color: colors.gray400 },
+  metricValue:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
+  measureNotes: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.sm, fontStyle: 'italic' },
+  emptyText:    { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 
   // Modals
-  overlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalBox:  { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '92%' },
-  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
-  modalTitle:{ fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  modalHint: { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
-  modalBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
+  modalOverlay:{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalKAV:    { flex: 1, justifyContent: 'flex-end' },
+  modalBox:    { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '96%' },
+  modalHead:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
+  modalTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  modalHint:   { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
+  modalBody:   { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
 
-  // Edit form sections
-  formSection:     { marginBottom: spacing.xl },
-  formSectionTitle:{
-    fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400,
-    letterSpacing: 0.8, marginBottom: spacing.md,
-    paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.gray100,
-  },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
-  fieldHint:  { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.sm, lineHeight: 16 },
-  input:      { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
-  readonlyField: {
-    borderWidth: 1.5, borderColor: colors.gray100, borderRadius: borderRadius.sm,
-    padding: spacing.md, backgroundColor: colors.gray50,
-  },
-  readonlyTxt: { fontSize: fontSize.md, color: colors.gray400 },
-  twoColRow:   { flexDirection: 'row', gap: spacing.md },
-  twoColItem:  { flex: 1 },
+  // Form inputs
+  fieldLabel:   { fontSize: fontSize.sm, fontWeight: '500', color: colors.gray700, marginBottom: spacing.sm, marginTop: spacing.lg },
+  req:          { color: colors.red500 },
+  hintTxt:      { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.sm, lineHeight: 16 },
+  input:        { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 2, fontSize: fontSize.md, color: colors.black, backgroundColor: colors.white },
+  readonlyField:{ borderWidth: 1.5, borderColor: colors.gray100, borderRadius: borderRadius.sm, padding: spacing.md, backgroundColor: colors.gray50 },
+  readonlyTxt:  { fontSize: fontSize.md, color: colors.gray400 },
+  row2:         { flexDirection: 'row', gap: spacing.md },
+  condGroupLabel:{ fontSize: fontSize.xs, fontWeight: '700', color: colors.gray600, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: spacing.lg, marginBottom: spacing.sm },
+  saveBtn:      { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl },
+  saveBtnTxt:   { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
 
-  // Chip selects
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.xs },
-  chip: {
-    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
-    borderRadius: borderRadius.full, borderWidth: 1, borderColor: colors.gray200,
-  },
-  chipActive: { backgroundColor: colors.black, borderColor: colors.black },
-  chipTxt:    { fontSize: fontSize.xs, color: colors.gray600 },
-
-  // Tag inputs
-  tagInputRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center', marginBottom: spacing.sm },
-  tagAddBtn:   {
-    width: 40, height: 46, backgroundColor: colors.black, borderRadius: borderRadius.sm,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  selectedTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
-  removableTag: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.gray100, paddingLeft: spacing.sm + 2,
-    paddingRight: spacing.sm, paddingVertical: spacing.xs, borderRadius: borderRadius.full,
-    borderWidth: 1, borderColor: colors.gray200,
-  },
-  removableTagRed: { backgroundColor: colors.red50, borderColor: '#FCA5A5' },
-  removableTagTxt: { fontSize: fontSize.xs, color: colors.gray700, fontWeight: '500' },
-  noTagsTxt: { fontSize: fontSize.xs, color: colors.gray400, fontStyle: 'italic', marginTop: spacing.xs },
-
-  // Save
-  saveBtn:    { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl },
-  saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
-
-  // Workout assignment rows
+  // Workout modal rows
   workoutRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
   workoutRowSelected: { backgroundColor: colors.gray50 },
   workoutRowAvatar:   { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.gray100, alignItems: 'center', justifyContent: 'center' },

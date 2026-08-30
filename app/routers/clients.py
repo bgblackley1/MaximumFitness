@@ -1,4 +1,3 @@
-# app/routers/clients.py
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -125,21 +124,24 @@ async def update_client(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # ── Update User model fields (name, phone) ────────────────────────────────
-    # get_client_by_id loads the user via selectinload so client.user is available
-    if ('name' in update_data or 'phone' in update_data) and client.user:
+    # ── Update User model fields (name & phone) separately ──────────────────
+    if client.user:
         if 'name' in update_data and update_data['name']:
-            client.user.name  = update_data.pop('name')
+            client.user.name = update_data.pop('name')
         else:
             update_data.pop('name', None)
+
         if 'phone' in update_data:
             client.user.phone = update_data.pop('phone')
+        else:
+            update_data.pop('phone', None)
+
         await db.flush()
     else:
-        update_data.pop('name',  None)
+        update_data.pop('name', None)
         update_data.pop('phone', None)
 
-    # ── Update ClientProfile fields ───────────────────────────────────────────
+    # ── Update ClientProfile fields ──────────────────────────────────────────
     updated = await client_service.update_client(db, client, **update_data)
     last_check_in = await client_service.get_last_check_in(db, updated.id)
 

@@ -17,14 +17,13 @@ class ClientCreate(BaseModel):
 
 
 class ClientCreateViaAuth(ClientCreate):
-    """Used by the /auth/register-client endpoint."""
     pass
 
 
 class ClientUpdate(BaseModel):
-    # ── User model fields ──────────────────────────────────────────────────────
-    name:  str | None = None    # ← NEW: updates User.name
-    phone: str | None = None    # ← NEW: updates User.phone
+    # ── User model fields (updated separately in the router) ──────────────────
+    name:  str | None = None
+    phone: str | None = None
     # ── ClientProfile fields ───────────────────────────────────────────────────
     age:                int   | None = None
     sex:                str   | None = None
