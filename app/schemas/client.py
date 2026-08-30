@@ -22,15 +22,19 @@ class ClientCreateViaAuth(ClientCreate):
 
 
 class ClientUpdate(BaseModel):
-    age: int | None = None
-    sex: str | None = None
-    height_cm: float | None = None
+    # ── User model fields ──────────────────────────────────────────────────────
+    name:  str | None = None    # ← NEW: updates User.name
+    phone: str | None = None    # ← NEW: updates User.phone
+    # ── ClientProfile fields ───────────────────────────────────────────────────
+    age:                int   | None = None
+    sex:                str   | None = None
+    height_cm:          float | None = None
     starting_weight_kg: float | None = None
-    goals: list[str] | None = None
-    injuries: list[str] | None = None
-    notes: str | None = None
-    status: str | None = None
-    plan_type: str | None = None
+    goals:              list[str] | None = None
+    injuries:           list[str] | None = None
+    notes:              str   | None = None
+    status:             str   | None = None
+    plan_type:          str   | None = None
 
 
 class ClientResponse(BaseModel):

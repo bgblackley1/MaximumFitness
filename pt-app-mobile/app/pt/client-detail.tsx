@@ -17,6 +17,16 @@ const FOCUS_LABELS: Record<string, string> = {
   back: 'Back', chest: 'Chest', core: 'Core', full_body: 'Full Body', cardio: 'Cardio',
 };
 
+const GOAL_PRESETS = [
+  'Lose Weight', 'Build Muscle', 'Improve Fitness', 'Increase Strength',
+  'Improve Flexibility', 'Sports Performance', 'Injury Recovery',
+  'General Health', 'Improve Endurance', 'Tone Up',
+];
+
+const PLAN_TYPES = ['Monthly', 'Quarterly', 'Pay As You Go', '6 Month', 'Annual', 'Custom'];
+
+// ── Main Screen ──────────────────────────────────────────────────────────────
+
 export default function ClientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
@@ -29,18 +39,32 @@ export default function ClientDetailScreen() {
   const [loading,          setLoading]          = useState(true);
   const [refreshing,       setRefreshing]       = useState(false);
 
-  // ── Edit client details modal ──
-  const [editClientModal,  setEditClientModal]  = useState(false);
-  const [savingClient,     setSavingClient]     = useState(false);
+  // ── Edit client modal ──
+  const [editModal,    setEditModal]    = useState(false);
+  const [savingClient, setSavingClient] = useState(false);
   const [editForm, setEditForm] = useState({
+    // Contact
+    name:  '',
+    phone: '',
+    // Physical
     age:                '',
     sex:                '',
     height_cm:          '',
     starting_weight_kg: '',
-    notes:              '',
-    injuries:           '',   // comma-separated string, split on save
-    status:             'active',
+    // Tags
+    goals:       [] as string[],
+    injuries:    [] as string[],
+    goalInput:   '',
+    injuryInput: '',
+    // Membership
+    status:    'active',
+    plan_type: '',
+    // Notes
+    notes: '',
   });
+
+  // ── Goal status update ──
+  const [updatingGoal, setUpdatingGoal] = useState<string | null>(null);
 
   // ── Measurement modal ──
   const [mModal,  setMModal]  = useState(false);
@@ -51,19 +75,18 @@ export default function ClientDetailScreen() {
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
 
-  // ── Goal modal ──
+  // ── Goal add modal ──
   const [gModal,  setGModal]  = useState(false);
   const [gSaving, setGSaving] = useState(false);
   const [gForm, setGForm] = useState({
-    description: '', type: 'weight',
-    target_value: '', target_unit: 'kg',
+    description: '', type: 'weight', target_value: '', target_unit: 'kg',
     target_date: '', current_value: '',
   });
 
   // ── Workout assignment modal ──
-  const [workoutModal,      setWorkoutModal]      = useState(false);
+  const [workoutModal,       setWorkoutModal]       = useState(false);
   const [selectedWorkoutIds, setSelectedWorkoutIds] = useState<string[]>([]);
-  const [savingWorkouts,    setSavingWorkouts]    = useState(false);
+  const [savingWorkouts,     setSavingWorkouts]     = useState(false);
 
   useEffect(() => { if (id) loadData(); }, [id]);
 
@@ -95,45 +118,86 @@ export default function ClientDetailScreen() {
     setRefreshing(false);
   };
 
-  // ✅ FIX: canGoBack guard — never sends PT back to homepage
+  // ✅ FIX: Use router.navigate to go to the clients TAB — reliable for hidden tab screens
   const handleBack = () => {
-    if (router.canGoBack()) router.back();
-    else router.replace('/pt/clients' as any);
+    router.navigate('/pt/clients' as any);
   };
 
-  // ── Open edit client modal ───────────────────────────────────────────────
+  // ── Open edit client modal ─────────────────────────────────────────────────
   const openEditClient = () => {
     if (!client) return;
     setEditForm({
-      age:                client.age                != null ? String(client.age)                : '',
-      sex:                client.sex                ?? '',
+      name:               client.name   ?? '',
+      phone:              client.phone  ?? '',
+      age:                client.age    != null ? String(client.age)                : '',
+      sex:                client.sex    ?? '',
       height_cm:          client.height_cm          != null ? String(client.height_cm)          : '',
       starting_weight_kg: client.starting_weight_kg != null ? String(client.starting_weight_kg) : '',
-      notes:              client.notes              ?? '',
-      injuries:           Array.isArray(client.injuries) ? client.injuries.join(', ')            : '',
-      status:             client.status             ?? 'active',
+      goals:       Array.isArray(client.goals)    ? [...client.goals]    : [],
+      injuries:    Array.isArray(client.injuries) ? [...client.injuries] : [],
+      goalInput:   '',
+      injuryInput: '',
+      status:    client.status    ?? 'active',
+      plan_type: client.plan_type ?? '',
+      notes:     client.notes     ?? '',
     });
-    setEditClientModal(true);
+    setEditModal(true);
   };
 
-  // ── Save client edits ────────────────────────────────────────────────────
+  // ── Tag helpers ────────────────────────────────────────────────────────────
+  const addGoalTag = (tag: string) => {
+    const t = tag.trim();
+    if (!t || editForm.goals.includes(t)) return;
+    setEditForm((f) => ({ ...f, goals: [...f.goals, t], goalInput: '' }));
+  };
+
+  const removeGoalTag = (tag: string) => {
+    setEditForm((f) => ({ ...f, goals: f.goals.filter((g) => g !== tag) }));
+  };
+
+  const toggleGoalPreset = (preset: string) => {
+    if (editForm.goals.includes(preset)) {
+      removeGoalTag(preset);
+    } else {
+      setEditForm((f) => ({ ...f, goals: [...f.goals, preset] }));
+    }
+  };
+
+  const addInjuryTag = (tag: string) => {
+    const t = tag.trim();
+    if (!t || editForm.injuries.includes(t)) return;
+    setEditForm((f) => ({ ...f, injuries: [...f.injuries, t], injuryInput: '' }));
+  };
+
+  const removeInjuryTag = (tag: string) => {
+    setEditForm((f) => ({ ...f, injuries: f.injuries.filter((i) => i !== tag) }));
+  };
+
+  // ── Save client ────────────────────────────────────────────────────────────
   const handleSaveClient = async () => {
+    if (!editForm.name.trim()) {
+      Alert.alert('Error', 'Client name is required');
+      return;
+    }
     setSavingClient(true);
     try {
-      const payload: any = {};
-      if (editForm.age)                payload.age                = parseInt(editForm.age);
-      if (editForm.sex)                payload.sex                = editForm.sex;
-      if (editForm.height_cm)          payload.height_cm          = parseFloat(editForm.height_cm);
-      if (editForm.starting_weight_kg) payload.starting_weight_kg = parseFloat(editForm.starting_weight_kg);
-      if (editForm.notes !== undefined) payload.notes = editForm.notes || null;
-      payload.injuries = editForm.injuries
-        ? editForm.injuries.split(',').map((s) => s.trim()).filter(Boolean)
-        : [];
-      payload.status = editForm.status;
+      const payload: any = {
+        name:     editForm.name.trim(),
+        goals:    editForm.goals,
+        injuries: editForm.injuries,
+        status:   editForm.status,
+      };
+      if (editForm.phone.trim())        payload.phone              = editForm.phone.trim();
+      if (editForm.age)                 payload.age                = parseInt(editForm.age);
+      if (editForm.sex)                 payload.sex                = editForm.sex;
+      if (editForm.height_cm)           payload.height_cm          = parseFloat(editForm.height_cm);
+      if (editForm.starting_weight_kg)  payload.starting_weight_kg = parseFloat(editForm.starting_weight_kg);
+      if (editForm.plan_type.trim())    payload.plan_type          = editForm.plan_type.trim();
+      payload.notes = editForm.notes.trim() || null;
 
       const res = await API.put(`/clients/${id}`, payload);
       setClient((prev: any) => ({ ...prev, ...res.data }));
-      setEditClientModal(false);
+      setEditModal(false);
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.detail || 'Failed to update client details');
     } finally {
@@ -141,42 +205,70 @@ export default function ClientDetailScreen() {
     }
   };
 
-  // ── Save measurement ─────────────────────────────────────────────────────
+  // ── Goal status update ─────────────────────────────────────────────────────
+  const updateGoalStatus = async (
+    goalId: string,
+    newStatus: 'achieved' | 'abandoned' | 'in_progress',
+  ) => {
+    setUpdatingGoal(goalId);
+    try {
+      const res = await API.put(`/clients/${id}/goals/${goalId}`, { status: newStatus });
+      setGoals((prev) => prev.map((g) => g.id === goalId ? res.data : g));
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to update goal');
+    } finally {
+      setUpdatingGoal(null);
+    }
+  };
+
+  // ── Save measurement ───────────────────────────────────────────────────────
   const saveMeasurement = async () => {
     if (!mForm.date) { Alert.alert('Error', 'Date is required'); return; }
     setMSaving(true);
     try {
       const payload: any = { date: mForm.date };
-      ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm'].forEach((k) => {
-        const v = (mForm as any)[k];
-        if (v !== '') payload[k] = parseFloat(v);
-      });
+      ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm']
+        .forEach((k) => {
+          const v = (mForm as any)[k];
+          if (v !== '') payload[k] = parseFloat(v);
+        });
       if (mForm.notes) payload.notes = mForm.notes;
       const res = await API.post(`/clients/${id}/measurements`, payload);
       setMeasurements((prev) => [res.data, ...prev]);
       setMModal(false);
-      setMForm({ date: new Date().toISOString().split('T')[0], weight_kg: '', chest_cm: '', waist_cm: '', left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '' });
-    } catch (err: any) { Alert.alert('Error', err.response?.data?.detail || 'Failed to save'); }
-    finally { setMSaving(false); }
+      setMForm({
+        date: new Date().toISOString().split('T')[0],
+        weight_kg: '', chest_cm: '', waist_cm: '',
+        left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
+      });
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
+    } finally { setMSaving(false); }
   };
 
-  // ── Save goal ────────────────────────────────────────────────────────────
+  // ── Save goal ──────────────────────────────────────────────────────────────
   const saveGoal = async () => {
-    if (!gForm.description || !gForm.target_value) { Alert.alert('Error', 'Description and target value are required'); return; }
+    if (!gForm.description || !gForm.target_value) {
+      Alert.alert('Error', 'Description and target value are required'); return;
+    }
     setGSaving(true);
     try {
-      const payload: any = { description: gForm.description, type: gForm.type, target_value: parseFloat(gForm.target_value), target_unit: gForm.target_unit };
+      const payload: any = {
+        description: gForm.description, type: gForm.type,
+        target_value: parseFloat(gForm.target_value), target_unit: gForm.target_unit,
+      };
       if (gForm.target_date)   payload.target_date   = gForm.target_date;
       if (gForm.current_value) payload.current_value = parseFloat(gForm.current_value);
       const res = await API.post(`/clients/${id}/goals`, payload);
       setGoals((prev) => [res.data, ...prev]);
       setGModal(false);
       setGForm({ description: '', type: 'weight', target_value: '', target_unit: 'kg', target_date: '', current_value: '' });
-    } catch (err: any) { Alert.alert('Error', err.response?.data?.detail || 'Failed to save'); }
-    finally { setGSaving(false); }
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
+    } finally { setGSaving(false); }
   };
 
-  // ── Save workout assignments ─────────────────────────────────────────────
+  // ── Save workout assignments ───────────────────────────────────────────────
   const saveWorkoutAssignments = async () => {
     setSavingWorkouts(true);
     try {
@@ -184,12 +276,15 @@ export default function ClientDetailScreen() {
       const res = await API.get('/workout-plans', { params: { client_id: id } });
       setAssignedWorkouts(res.data);
       setWorkoutModal(false);
-    } catch (err: any) { Alert.alert('Error', err.response?.data?.detail || 'Failed to save workout assignments'); }
-    finally { setSavingWorkouts(false); }
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save workout assignments');
+    } finally { setSavingWorkouts(false); }
   };
 
   const toggleWorkout = (wid: string) =>
-    setSelectedWorkoutIds((prev) => prev.includes(wid) ? prev.filter((x) => x !== wid) : [...prev, wid]);
+    setSelectedWorkoutIds((prev) =>
+      prev.includes(wid) ? prev.filter((x) => x !== wid) : [...prev, wid]
+    );
 
   const openWorkoutModal = () => {
     setSelectedWorkoutIds(assignedWorkouts.map((w) => w.id));
@@ -198,6 +293,9 @@ export default function ClientDetailScreen() {
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const statusBadgeVariant = (s: string) =>
+    s === 'achieved' ? 'active' : s === 'abandoned' ? 'danger' : 'pending';
 
   if (loading) return <LoadingScreen />;
   if (!client) {
@@ -210,21 +308,22 @@ export default function ClientDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
+      {/* ── Header ── */}
       <View style={styles.header}>
-        {/* ✅ FIX: back button uses canGoBack guard */}
         <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.black} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Client Profile</Text>
-        <View style={{ width: 44 }} />
+        <TouchableOpacity onPress={openEditClient} style={styles.editHeaderBtn}>
+          <Ionicons name="create-outline" size={20} color={colors.black} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Profile card */}
+        {/* ── Profile card ── */}
         <Card style={styles.profileCard}>
           <View style={styles.profileTop}>
             <View style={styles.avatar}>
@@ -233,9 +332,17 @@ export default function ClientDetailScreen() {
             <View style={styles.profileInfo}>
               <Text style={styles.clientName}>{client.name}</Text>
               <Text style={styles.clientEmail}>{client.email}</Text>
+              {client.phone ? (
+                <Text style={styles.clientPhone}>{client.phone}</Text>
+              ) : null}
             </View>
-            <Badge label={client.status || 'active'} variant={client.status === 'active' ? 'active' : 'inactive'} />
+            <Badge
+              label={client.status || 'active'}
+              variant={client.status === 'active' ? 'active' : 'inactive'}
+            />
           </View>
+
+          {/* Stats row */}
           <View style={styles.statsRow}>
             {[
               { label: 'Age',    value: client.age           ? `${client.age}`           : '—' },
@@ -249,26 +356,59 @@ export default function ClientDetailScreen() {
               </View>
             ))}
           </View>
-          {client.injuries?.length > 0 && (
-            <View style={styles.injuriesRow}>
-              <Text style={styles.injuriesLabel}>Medical / Injuries:</Text>
-              <Text style={styles.injuriesTxt}>{client.injuries.join(', ')}</Text>
+
+          {/* Plan type */}
+          {client.plan_type ? (
+            <View style={styles.planRow}>
+              <Ionicons name="card-outline" size={14} color={colors.gray500} />
+              <Text style={styles.planTxt}>{client.plan_type} plan</Text>
             </View>
-          )}
-          {client.notes && (
+          ) : null}
+
+          {/* Profile goals (JSONB tags) */}
+          {client.goals?.length > 0 ? (
+            <View style={styles.tagsSection}>
+              <Text style={styles.tagsTitle}>Goals</Text>
+              <View style={styles.tagsWrap}>
+                {client.goals.map((g: string) => (
+                  <View key={g} style={styles.goalTag}>
+                    <Text style={styles.goalTagTxt}>{g}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Injuries / Medical */}
+          {client.injuries?.length > 0 ? (
+            <View style={styles.tagsSection}>
+              <Text style={styles.tagsTitle}>Medical / Injuries</Text>
+              <View style={styles.tagsWrap}>
+                {client.injuries.map((inj: string) => (
+                  <View key={inj} style={styles.injuryTag}>
+                    <Text style={styles.injuryTagTxt}>{inj}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Notes */}
+          {client.notes ? (
             <View style={styles.notesSection}>
-              <Text style={styles.notesLabel}>Notes</Text>
+              <Text style={styles.notesLabel}>Trainer Notes</Text>
               <Text style={styles.notesText}>{client.notes}</Text>
             </View>
-          )}
-          {/* ── Edit Details button ── */}
+          ) : null}
+
+          {/* Edit details button */}
           <TouchableOpacity style={styles.editDetailsBtn} onPress={openEditClient}>
             <Ionicons name="create-outline" size={15} color={colors.gray600} />
-            <Text style={styles.editDetailsBtnTxt}>Edit Client Details</Text>
+            <Text style={styles.editDetailsBtnTxt}>Edit All Client Details</Text>
           </TouchableOpacity>
         </Card>
 
-        {/* Assigned Workouts */}
+        {/* ── Assigned Workouts ── */}
         <View style={styles.sectionHeader}>
           <View>
             <Text style={styles.sectionTitle}>Assigned Workouts</Text>
@@ -296,7 +436,7 @@ export default function ClientDetailScreen() {
               <TouchableOpacity
                 key={w.id}
                 style={styles.workoutCard}
-                onPress={() => router.push(`/pt/workout-detail?id=${w.id}` as any)}
+                onPress={() => router.navigate(`/pt/workout-detail?id=${w.id}` as any)}
                 activeOpacity={0.8}
               >
                 <Text style={styles.workoutCardTitle}>{w.title}</Text>
@@ -313,40 +453,94 @@ export default function ClientDetailScreen() {
           </View>
         )}
 
-        {/* Goals */}
+        {/* ── Goals (Goal model) ── */}
         <View style={[styles.sectionHeader, { marginTop: spacing.xl }]}>
-          <Text style={styles.sectionTitle}>Goals</Text>
+          <Text style={styles.sectionTitle}>Progress Goals</Text>
           <TouchableOpacity style={styles.addIcon} onPress={() => setGModal(true)}>
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
         </View>
+
         {goals.length === 0 ? (
-          <Card><Text style={styles.emptyText}>No goals set yet.</Text></Card>
+          <Card><Text style={styles.emptyText}>No goals set yet. Tap + to add one.</Text></Card>
         ) : (
-          goals.map((goal) => (
-            <Card key={goal.id} style={styles.goalCard}>
-              <View style={styles.goalRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.goalDesc}>{goal.description}</Text>
-                  <Text style={styles.goalMeta}>
-                    Target: {goal.target_value} {goal.target_unit}
-                    {goal.current_value != null ? ` · Current: ${goal.current_value} ${goal.target_unit}` : ''}
-                    {goal.target_date ? ` · Due: ${fmtDate(goal.target_date)}` : ''}
-                  </Text>
+          goals.map((goal) => {
+            const isUpdating = updatingGoal === goal.id;
+            const canAct     = goal.status === 'in_progress';
+            const progress   =
+              goal.current_value != null && goal.target_value && goal.target_value > 0
+                ? Math.min((goal.current_value / goal.target_value) * 100, 100)
+                : null;
+
+            return (
+              <Card key={goal.id} style={styles.goalCard}>
+                {/* Goal header */}
+                <View style={styles.goalRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.goalDesc}>{goal.description}</Text>
+                    <Text style={styles.goalMeta}>
+                      Target: {goal.target_value} {goal.target_unit}
+                      {goal.current_value != null
+                        ? ` · Current: ${goal.current_value} ${goal.target_unit}` : ''}
+                      {goal.target_date ? ` · Due: ${fmtDate(goal.target_date)}` : ''}
+                    </Text>
+                  </View>
+                  <Badge
+                    label={goal.status.replace('_', ' ')}
+                    variant={statusBadgeVariant(goal.status)}
+                  />
                 </View>
-                <Badge label={goal.status.replace('_', ' ')} variant={goal.status === 'achieved' ? 'active' : goal.status === 'abandoned' ? 'danger' : 'pending'} />
-              </View>
-            </Card>
-          ))
+
+                {/* Progress bar for in_progress goals */}
+                {progress !== null && canAct && (
+                  <View style={styles.goalProgressBar}>
+                    <View style={[styles.goalProgressFill, { width: `${progress}%` as any }]} />
+                  </View>
+                )}
+
+                {/* ✅ NEW: Goal action buttons */}
+                {isUpdating ? (
+                  <ActivityIndicator color={colors.black} style={{ marginTop: spacing.md }} />
+                ) : canAct ? (
+                  <View style={styles.goalActions}>
+                    <TouchableOpacity
+                      style={styles.goalCompleteBtn}
+                      onPress={() => updateGoalStatus(goal.id, 'achieved')}
+                    >
+                      <Ionicons name="checkmark-circle-outline" size={14} color={colors.green700} />
+                      <Text style={styles.goalCompleteBtnTxt}>Mark Complete</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.goalAbandonBtn}
+                      onPress={() => updateGoalStatus(goal.id, 'abandoned')}
+                    >
+                      <Ionicons name="close-circle-outline" size={14} color={colors.gray500} />
+                      <Text style={styles.goalAbandonBtnTxt}>Abandon</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  /* Re-open achieved/abandoned goals */
+                  <TouchableOpacity
+                    style={styles.goalReopenBtn}
+                    onPress={() => updateGoalStatus(goal.id, 'in_progress')}
+                  >
+                    <Ionicons name="refresh-outline" size={14} color={colors.gray500} />
+                    <Text style={styles.goalReopenBtnTxt}>Re-open Goal</Text>
+                  </TouchableOpacity>
+                )}
+              </Card>
+            );
+          })
         )}
 
-        {/* Measurements */}
+        {/* ── Measurements ── */}
         <View style={[styles.sectionHeader, { marginTop: spacing.xl }]}>
           <Text style={styles.sectionTitle}>Measurements</Text>
           <TouchableOpacity style={styles.addIcon} onPress={() => setMModal(true)}>
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
         </View>
+
         {measurements.length === 0 ? (
           <Card><Text style={styles.emptyText}>No measurements recorded yet.</Text></Card>
         ) : (
@@ -375,108 +569,271 @@ export default function ClientDetailScreen() {
         )}
       </ScrollView>
 
-      {/* ═══════════════════════════════════════════════════════════════════════
-          EDIT CLIENT DETAILS MODAL
-      ════════════════════════════════════════════════════════════════════════ */}
-      <Modal visible={editClientModal} transparent animationType="slide">
+      {/* ════════════════════════════════════════════════════════════════════
+          EDIT CLIENT MODAL — Full client info form
+      ════════════════════════════════════════════════════════════════════ */}
+      <Modal visible={editModal} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
               <Text style={styles.modalTitle}>Edit Client Details</Text>
-              <TouchableOpacity onPress={() => setEditClientModal(false)}>
+              <TouchableOpacity onPress={() => setEditModal(false)}>
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }} keyboardShouldPersistTaps="handled">
 
-              {/* Status */}
-              <Text style={styles.fieldLabel}>Status</Text>
-              <View style={styles.chipRow}>
-                {['active', 'inactive', 'archived'].map((s) => (
-                  <TouchableOpacity
-                    key={s}
-                    style={[styles.chip, editForm.status === s && styles.chipActive]}
-                    onPress={() => setEditForm((f) => ({ ...f, status: s }))}
-                  >
-                    <Text style={[styles.chipTxt, editForm.status === s && { color: colors.white }]}>
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: spacing.xxxl + 20 }}
+              keyboardShouldPersistTaps="handled"
+            >
+
+              {/* ── CONTACT DETAILS ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Contact Details</Text>
+
+                <Text style={styles.fieldLabel}>Full Name *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.name}
+                  onChangeText={(v) => setEditForm((f) => ({ ...f, name: v }))}
+                  placeholder="Client's full name"
+                  placeholderTextColor={colors.gray400}
+                  autoFocus
+                />
+
+                <Text style={styles.fieldLabel}>Phone Number</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.phone}
+                  onChangeText={(v) => setEditForm((f) => ({ ...f, phone: v }))}
+                  placeholder="e.g. 07700 900123"
+                  placeholderTextColor={colors.gray400}
+                  keyboardType="phone-pad"
+                />
+
+                <Text style={styles.fieldLabel}>Email</Text>
+                <View style={styles.readonlyField}>
+                  <Text style={styles.readonlyTxt}>{client.email}</Text>
+                </View>
+                <Text style={styles.fieldHint}>Email cannot be changed after account creation.</Text>
               </View>
 
-              {/* Age */}
-              <Text style={styles.fieldLabel}>Age</Text>
-              <TextInput
-                style={styles.input}
-                value={editForm.age}
-                onChangeText={(v) => setEditForm((f) => ({ ...f, age: v }))}
-                placeholder="e.g. 28"
-                placeholderTextColor={colors.gray400}
-                keyboardType="number-pad"
-              />
+              {/* ── PHYSICAL STATS ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Physical Stats</Text>
 
-              {/* Sex */}
-              <Text style={styles.fieldLabel}>Sex</Text>
-              <View style={styles.chipRow}>
-                {['male', 'female', 'non-binary', 'prefer not to say'].map((s) => (
-                  <TouchableOpacity
-                    key={s}
-                    style={[styles.chip, editForm.sex === s && styles.chipActive]}
-                    onPress={() => setEditForm((f) => ({ ...f, sex: s }))}
-                  >
-                    <Text style={[styles.chipTxt, editForm.sex === s && { color: colors.white }]}>
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                <Text style={styles.fieldLabel}>Sex / Gender</Text>
+                <View style={styles.chipRow}>
+                  {['Male', 'Female', 'Non-Binary', 'Prefer Not to Say'].map((s) => {
+                    const val = s.toLowerCase().replace(/ /g, '-');
+                    return (
+                      <TouchableOpacity
+                        key={s}
+                        style={[styles.chip, editForm.sex === val && styles.chipActive]}
+                        onPress={() => setEditForm((f) => ({ ...f, sex: f.sex === val ? '' : val }))}
+                      >
+                        <Text style={[styles.chipTxt, editForm.sex === val && { color: colors.white }]}>
+                          {s}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.twoColRow}>
+                  <View style={styles.twoColItem}>
+                    <Text style={styles.fieldLabel}>Age</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={editForm.age}
+                      onChangeText={(v) => setEditForm((f) => ({ ...f, age: v }))}
+                      placeholder="e.g. 28"
+                      placeholderTextColor={colors.gray400}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                  <View style={styles.twoColItem}>
+                    <Text style={styles.fieldLabel}>Height (cm)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={editForm.height_cm}
+                      onChangeText={(v) => setEditForm((f) => ({ ...f, height_cm: v }))}
+                      placeholder="e.g. 175"
+                      placeholderTextColor={colors.gray400}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.fieldLabel}>Starting Weight (kg)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.starting_weight_kg}
+                  onChangeText={(v) => setEditForm((f) => ({ ...f, starting_weight_kg: v }))}
+                  placeholder="e.g. 85"
+                  placeholderTextColor={colors.gray400}
+                  keyboardType="decimal-pad"
+                />
               </View>
 
-              {/* Height */}
-              <Text style={styles.fieldLabel}>Height (cm)</Text>
-              <TextInput
-                style={styles.input}
-                value={editForm.height_cm}
-                onChangeText={(v) => setEditForm((f) => ({ ...f, height_cm: v }))}
-                placeholder="e.g. 175"
-                placeholderTextColor={colors.gray400}
-                keyboardType="decimal-pad"
-              />
+              {/* ── FITNESS GOALS (tags) ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Fitness Goals</Text>
+                <Text style={styles.fieldHint}>
+                  Tap a preset or type your own below.
+                </Text>
 
-              {/* Starting weight */}
-              <Text style={styles.fieldLabel}>Starting Weight (kg)</Text>
-              <TextInput
-                style={styles.input}
-                value={editForm.starting_weight_kg}
-                onChangeText={(v) => setEditForm((f) => ({ ...f, starting_weight_kg: v }))}
-                placeholder="e.g. 85"
-                placeholderTextColor={colors.gray400}
-                keyboardType="decimal-pad"
-              />
+                {/* Preset chips */}
+                <View style={styles.chipRow}>
+                  {GOAL_PRESETS.map((preset) => (
+                    <TouchableOpacity
+                      key={preset}
+                      style={[styles.chip, editForm.goals.includes(preset) && styles.chipActive]}
+                      onPress={() => toggleGoalPreset(preset)}
+                    >
+                      <Text style={[styles.chipTxt, editForm.goals.includes(preset) && { color: colors.white }]}>
+                        {preset}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-              {/* Injuries / Medical */}
-              <Text style={styles.fieldLabel}>Medical Conditions / Injuries</Text>
-              <Text style={styles.fieldHint}>Comma-separated, e.g. "bad knee, lower back pain"</Text>
-              <TextInput
-                style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
-                value={editForm.injuries}
-                onChangeText={(v) => setEditForm((f) => ({ ...f, injuries: v }))}
-                placeholder="e.g. bad knee, lower back pain"
-                placeholderTextColor={colors.gray400}
-                multiline
-              />
+                {/* Custom goal input */}
+                <View style={styles.tagInputRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    value={editForm.goalInput}
+                    onChangeText={(v) => setEditForm((f) => ({ ...f, goalInput: v }))}
+                    placeholder="Add custom goal..."
+                    placeholderTextColor={colors.gray400}
+                    onSubmitEditing={() => addGoalTag(editForm.goalInput)}
+                    returnKeyType="done"
+                  />
+                  <TouchableOpacity
+                    style={styles.tagAddBtn}
+                    onPress={() => addGoalTag(editForm.goalInput)}
+                  >
+                    <Ionicons name="add" size={20} color={colors.white} />
+                  </TouchableOpacity>
+                </View>
 
-              {/* Notes */}
-              <Text style={styles.fieldLabel}>Trainer Notes</Text>
-              <TextInput
-                style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
-                value={editForm.notes}
-                onChangeText={(v) => setEditForm((f) => ({ ...f, notes: v }))}
-                placeholder="Any additional notes about this client..."
-                placeholderTextColor={colors.gray400}
-                multiline
-              />
+                {/* Selected tags */}
+                {editForm.goals.length > 0 && (
+                  <View style={styles.selectedTags}>
+                    {editForm.goals.map((g) => (
+                      <TouchableOpacity
+                        key={g}
+                        style={styles.removableTag}
+                        onPress={() => removeGoalTag(g)}
+                      >
+                        <Text style={styles.removableTagTxt}>{g}</Text>
+                        <Ionicons name="close" size={12} color={colors.gray600} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
 
+              {/* ── MEDICAL / INJURIES ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Medical Conditions & Injuries</Text>
+                <Text style={styles.fieldHint}>
+                  Add any conditions, injuries or restrictions the PT should know about.
+                </Text>
+
+                <View style={styles.tagInputRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    value={editForm.injuryInput}
+                    onChangeText={(v) => setEditForm((f) => ({ ...f, injuryInput: v }))}
+                    placeholder="e.g. Bad knee, Lower back pain"
+                    placeholderTextColor={colors.gray400}
+                    onSubmitEditing={() => addInjuryTag(editForm.injuryInput)}
+                    returnKeyType="done"
+                  />
+                  <TouchableOpacity
+                    style={styles.tagAddBtn}
+                    onPress={() => addInjuryTag(editForm.injuryInput)}
+                  >
+                    <Ionicons name="add" size={20} color={colors.white} />
+                  </TouchableOpacity>
+                </View>
+
+                {editForm.injuries.length > 0 ? (
+                  <View style={styles.selectedTags}>
+                    {editForm.injuries.map((inj) => (
+                      <TouchableOpacity
+                        key={inj}
+                        style={[styles.removableTag, styles.removableTagRed]}
+                        onPress={() => removeInjuryTag(inj)}
+                      >
+                        <Text style={[styles.removableTagTxt, { color: colors.red700 }]}>{inj}</Text>
+                        <Ionicons name="close" size={12} color={colors.red700} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noTagsTxt}>No conditions added — tap + to add</Text>
+                )}
+              </View>
+
+              {/* ── MEMBERSHIP ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Membership</Text>
+
+                <Text style={styles.fieldLabel}>Status</Text>
+                <View style={styles.chipRow}>
+                  {['active', 'inactive', 'archived'].map((s) => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[styles.chip, editForm.status === s && styles.chipActive]}
+                      onPress={() => setEditForm((f) => ({ ...f, status: s }))}
+                    >
+                      <Text style={[styles.chipTxt, editForm.status === s && { color: colors.white }]}>
+                        {s.charAt(0).toUpperCase() + s.slice(1)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.fieldLabel}>Plan / Membership Type</Text>
+                <View style={styles.chipRow}>
+                  {PLAN_TYPES.map((pt) => (
+                    <TouchableOpacity
+                      key={pt}
+                      style={[styles.chip, editForm.plan_type === pt && styles.chipActive]}
+                      onPress={() => setEditForm((f) => ({ ...f, plan_type: f.plan_type === pt ? '' : pt }))}
+                    >
+                      <Text style={[styles.chipTxt, editForm.plan_type === pt && { color: colors.white }]}>
+                        {pt}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TextInput
+                  style={[styles.input, { marginTop: spacing.sm }]}
+                  value={editForm.plan_type}
+                  onChangeText={(v) => setEditForm((f) => ({ ...f, plan_type: v }))}
+                  placeholder="Or type a custom plan type..."
+                  placeholderTextColor={colors.gray400}
+                />
+              </View>
+
+              {/* ── TRAINER NOTES ── */}
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Trainer Notes</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }]}
+                  value={editForm.notes}
+                  onChangeText={(v) => setEditForm((f) => ({ ...f, notes: v }))}
+                  placeholder="Any additional notes about this client..."
+                  placeholderTextColor={colors.gray400}
+                  multiline
+                />
+              </View>
+
+              {/* Save button */}
               <TouchableOpacity
                 style={[styles.saveBtn, savingClient && { opacity: 0.6 }]}
                 onPress={handleSaveClient}
@@ -484,7 +841,7 @@ export default function ClientDetailScreen() {
               >
                 {savingClient
                   ? <ActivityIndicator color={colors.white} />
-                  : <Text style={styles.saveBtnTxt}>Save Changes</Text>}
+                  : <Text style={styles.saveBtnTxt}>Save Client Details</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -508,15 +865,23 @@ export default function ClientDetailScreen() {
               {allWorkouts.length === 0 ? (
                 <View style={styles.noWorkoutsWrap}>
                   <Text style={styles.noWorkoutsTxt}>No active workouts in your library yet.</Text>
-                  <TouchableOpacity style={styles.createWorkoutBtn} onPress={() => { setWorkoutModal(false); router.push('/pt/workout-detail' as any); }}>
-                    <Text style={styles.createWorkoutBtnTxt}>Create a Workout →</Text>
+                  <TouchableOpacity
+                    style={styles.createWorkoutBtn}
+                    onPress={() => { setWorkoutModal(false); router.navigate('/pt/workouts' as any); }}
+                  >
+                    <Text style={styles.createWorkoutBtnTxt}>Go to Workouts →</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
                 allWorkouts.map((w) => {
                   const isSelected = selectedWorkoutIds.includes(w.id);
                   return (
-                    <TouchableOpacity key={w.id} style={[styles.workoutRow, isSelected && styles.workoutRowSelected]} onPress={() => toggleWorkout(w.id)} activeOpacity={0.7}>
+                    <TouchableOpacity
+                      key={w.id}
+                      style={[styles.workoutRow, isSelected && styles.workoutRowSelected]}
+                      onPress={() => toggleWorkout(w.id)}
+                      activeOpacity={0.7}
+                    >
                       <View style={[styles.workoutRowAvatar, isSelected && { backgroundColor: colors.black }]}>
                         <Ionicons name="barbell-outline" size={16} color={isSelected ? colors.white : colors.gray500} />
                       </View>
@@ -541,8 +906,14 @@ export default function ClientDetailScreen() {
                       ? 'No workouts selected'
                       : `${selectedWorkoutIds.length} workout${selectedWorkoutIds.length !== 1 ? 's' : ''} selected`}
                   </Text>
-                  <TouchableOpacity style={[styles.saveBtn, savingWorkouts && { opacity: 0.6 }]} onPress={saveWorkoutAssignments} disabled={savingWorkouts}>
-                    {savingWorkouts ? <ActivityIndicator color={colors.white} /> : <Text style={styles.saveBtnTxt}>Save Assignments</Text>}
+                  <TouchableOpacity
+                    style={[styles.saveBtn, savingWorkouts && { opacity: 0.6 }]}
+                    onPress={saveWorkoutAssignments}
+                    disabled={savingWorkouts}
+                  >
+                    {savingWorkouts
+                      ? <ActivityIndicator color={colors.white} />
+                      : <Text style={styles.saveBtnTxt}>Save Assignments</Text>}
                   </TouchableOpacity>
                 </>
               )}
@@ -557,19 +928,27 @@ export default function ClientDetailScreen() {
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
               <Text style={styles.modalTitle}>Add Measurement</Text>
-              <TouchableOpacity onPress={() => setMModal(false)}><Ionicons name="close" size={24} color={colors.gray600} /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setMModal(false)}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
               <Text style={styles.fieldLabel}>Date</Text>
               <TextInput style={styles.input} value={mForm.date} onChangeText={(v) => setMForm((f) => ({ ...f, date: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={colors.gray400} />
-              {[['Weight (kg)', 'weight_kg'], ['Chest (cm)', 'chest_cm'], ['Waist (cm)', 'waist_cm'], ['L. Arm (cm)', 'left_arm_cm'], ['R. Arm (cm)', 'right_arm_cm'], ['Thigh (cm)', 'thigh_cm'], ['Hips (cm)', 'hips_cm']].map(([label, key]) => (
+              {[['Weight (kg)', 'weight_kg'], ['Chest (cm)', 'chest_cm'], ['Waist (cm)', 'waist_cm'],
+                ['L. Arm (cm)', 'left_arm_cm'], ['R. Arm (cm)', 'right_arm_cm'],
+                ['Thigh (cm)', 'thigh_cm'], ['Hips (cm)', 'hips_cm']].map(([label, key]) => (
                 <View key={key}>
                   <Text style={styles.fieldLabel}>{label}</Text>
-                  <TextInput style={styles.input} value={(mForm as any)[key]} onChangeText={(v) => setMForm((f) => ({ ...f, [key]: v }))} placeholder="Optional" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
+                  <TextInput style={styles.input} value={(mForm as any)[key]}
+                    onChangeText={(v) => setMForm((f) => ({ ...f, [key]: v }))}
+                    placeholder="Optional" placeholderTextColor={colors.gray400} keyboardType="decimal-pad" />
                 </View>
               ))}
               <Text style={styles.fieldLabel}>Notes</Text>
-              <TextInput style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]} value={mForm.notes} onChangeText={(v) => setMForm((f) => ({ ...f, notes: v }))} placeholder="Optional" placeholderTextColor={colors.gray400} multiline />
+              <TextInput style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+                value={mForm.notes} onChangeText={(v) => setMForm((f) => ({ ...f, notes: v }))}
+                placeholder="Optional" placeholderTextColor={colors.gray400} multiline />
               <TouchableOpacity style={[styles.saveBtn, mSaving && { opacity: 0.6 }]} onPress={saveMeasurement} disabled={mSaving}>
                 {mSaving ? <ActivityIndicator color={colors.white} /> : <Text style={styles.saveBtnTxt}>Save Measurement</Text>}
               </TouchableOpacity>
@@ -583,12 +962,14 @@ export default function ClientDetailScreen() {
         <View style={styles.overlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHead}>
-              <Text style={styles.modalTitle}>Add Goal</Text>
-              <TouchableOpacity onPress={() => setGModal(false)}><Ionicons name="close" size={24} color={colors.gray600} /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Add Progress Goal</Text>
+              <TouchableOpacity onPress={() => setGModal(false)}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
               <Text style={styles.fieldLabel}>Description *</Text>
-              <TextInput style={styles.input} value={gForm.description} onChangeText={(v) => setGForm((f) => ({ ...f, description: v }))} placeholder="e.g. Lose 10kg by summer" placeholderTextColor={colors.gray400} />
+              <TextInput style={styles.input} value={gForm.description} onChangeText={(v) => setGForm((f) => ({ ...f, description: v }))} placeholder="e.g. Reach 80kg bodyweight" placeholderTextColor={colors.gray400} />
               <Text style={styles.fieldLabel}>Type</Text>
               <View style={styles.chipRow}>
                 {['weight', 'strength', 'movement', 'custom'].map((t) => (
@@ -623,42 +1004,86 @@ export default function ClientDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  container:   { flex: 1, backgroundColor: colors.gray50 },
-  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
-  backBtn:     { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: '600' },
-  scroll:      { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
+  container:  { flex: 1, backgroundColor: colors.gray50 },
+  header:     {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray100,
+  },
+  backBtn:       { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle:   { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  editHeaderBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  scroll:     { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
+
+  // Profile card
   profileCard: { marginBottom: spacing.lg },
-  profileTop:  { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xl },
-  avatar:      { width: 52, height: 52, borderRadius: borderRadius.full, backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
+  profileTop:  { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.xl },
+  avatar:      {
+    width: 52, height: 52, borderRadius: borderRadius.full, backgroundColor: colors.black,
+    alignItems: 'center', justifyContent: 'center', marginRight: spacing.md, flexShrink: 0,
+  },
   avatarText:  { color: colors.white, fontSize: fontSize.xl, fontWeight: '700' },
   profileInfo: { flex: 1 },
   clientName:  { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
   clientEmail: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
-  statsRow:    { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg },
+  clientPhone: { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
+  statsRow:    {
+    flexDirection: 'row', borderTopWidth: 1,
+    borderTopColor: colors.gray100, paddingTop: spacing.lg,
+  },
   statItem:    { flex: 1, alignItems: 'center' },
   statLabel:   { fontSize: fontSize.xs, color: colors.gray400 },
   statValue:   { fontSize: fontSize.md, fontWeight: '600', color: colors.black, marginTop: 2 },
-  injuriesRow: { borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md, marginTop: spacing.lg },
-  injuriesLabel:{ fontSize: fontSize.xs, color: colors.gray400, marginBottom: 2 },
-  injuriesTxt: { fontSize: fontSize.sm, color: colors.gray700, lineHeight: 18 },
-  notesSection:{ borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg, marginTop: spacing.lg },
-  notesLabel:  { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs },
-  notesText:   { fontSize: fontSize.sm, color: colors.gray600, lineHeight: 20 },
-  // Edit client button on profile card
+  planRow:     {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.md, paddingTop: spacing.md,
+    borderTopWidth: 1, borderTopColor: colors.gray100,
+  },
+  planTxt:     { fontSize: fontSize.sm, color: colors.gray500 },
+  tagsSection: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.gray100 },
+  tagsTitle:   { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray400, letterSpacing: 0.6, marginBottom: spacing.sm },
+  tagsWrap:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  goalTag: {
+    backgroundColor: '#EFF6FF', paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs, borderRadius: borderRadius.full,
+  },
+  goalTagTxt: { fontSize: fontSize.xs, color: '#1D4ED8', fontWeight: '500' },
+  injuryTag: {
+    backgroundColor: colors.red50, paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs, borderRadius: borderRadius.full,
+  },
+  injuryTagTxt: { fontSize: fontSize.xs, color: colors.red700, fontWeight: '500' },
+  notesSection: {
+    borderTopWidth: 1, borderTopColor: colors.gray100,
+    paddingTop: spacing.lg, marginTop: spacing.lg,
+  },
+  notesLabel: { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs },
+  notesText:  { fontSize: fontSize.sm, color: colors.gray600, lineHeight: 20 },
   editDetailsBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     justifyContent: 'center', marginTop: spacing.lg,
     borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.lg,
   },
   editDetailsBtnTxt: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray600 },
+
   // Section headers
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.md },
-  sectionTitle:  { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
-  sectionSub:    { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
-  addIcon:       { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center' },
-  manageBtn:     { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.black, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.sm + 1, borderRadius: borderRadius.sm },
-  manageBtnTxt:  { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
+  sectionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'flex-start', marginBottom: spacing.md,
+  },
+  sectionTitle: { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  sectionSub:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+  addIcon: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center',
+  },
+  manageBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.black, paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.sm + 1, borderRadius: borderRadius.sm,
+  },
+  manageBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
+
   // Workout grid
   emptyWorkoutsCard: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl, marginBottom: spacing.lg },
   emptyWorkoutsTxt:  { fontSize: fontSize.sm, color: colors.gray500 },
@@ -670,11 +1095,45 @@ const styles = StyleSheet.create({
   workoutFocusBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.full },
   workoutFocusTxt:   { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.8)', fontWeight: '600', textTransform: 'capitalize' },
   workoutExCount:    { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+
   // Goals
-  goalCard:    { marginBottom: spacing.sm },
-  goalRow:     { flexDirection: 'row', alignItems: 'center' },
-  goalDesc:    { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
-  goalMeta:    { fontSize: fontSize.sm, color: colors.gray400, marginTop: 4 },
+  goalCard: { marginBottom: spacing.sm },
+  goalRow:  { flexDirection: 'row', alignItems: 'flex-start' },
+  goalDesc: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
+  goalMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 4, lineHeight: 18 },
+  goalProgressBar: {
+    height: 5, backgroundColor: colors.gray100, borderRadius: 3,
+    overflow: 'hidden', marginTop: spacing.sm, marginBottom: spacing.xs,
+  },
+  goalProgressFill: { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
+
+  // Goal action buttons
+  goalActions: {
+    flexDirection: 'row', gap: spacing.sm,
+    marginTop: spacing.md, paddingTop: spacing.md,
+    borderTopWidth: 1, borderTopColor: colors.gray100,
+  },
+  goalCompleteBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.green50, paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm, borderRadius: borderRadius.full,
+    borderWidth: 1, borderColor: '#BBF7D0',
+  },
+  goalCompleteBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.green700 },
+  goalAbandonBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.gray100, paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm, borderRadius: borderRadius.full,
+  },
+  goalAbandonBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray500 },
+  goalReopenBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.md, paddingTop: spacing.md,
+    borderTopWidth: 1, borderTopColor: colors.gray100,
+    alignSelf: 'flex-start',
+  },
+  goalReopenBtnTxt: { fontSize: fontSize.xs, color: colors.gray400 },
+
   // Measurements
   measureCard: { marginBottom: spacing.sm },
   measureDate: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.sm },
@@ -684,22 +1143,63 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
   measureNotes:{ fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.sm, fontStyle: 'italic' },
   emptyText:   { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
+
   // Modals
-  overlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalBox:    { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '88%' },
-  modalHead:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
-  modalTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  modalHint:   { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
-  modalBody:   { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
-  fieldLabel:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
-  fieldHint:   { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.sm, marginTop: -spacing.xs },
-  input:       { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
-  chipRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  chip:        { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full, borderWidth: 1, borderColor: colors.gray200 },
-  chipActive:  { backgroundColor: colors.black, borderColor: colors.black },
-  chipTxt:     { fontSize: fontSize.xs, color: colors.gray600 },
-  saveBtn:     { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl },
-  saveBtnTxt:  { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
+  overlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalBox:  { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '92%' },
+  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
+  modalTitle:{ fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  modalHint: { fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
+  modalBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
+
+  // Edit form sections
+  formSection:     { marginBottom: spacing.xl },
+  formSectionTitle:{
+    fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400,
+    letterSpacing: 0.8, marginBottom: spacing.md,
+    paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.gray100,
+  },
+  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
+  fieldHint:  { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.sm, lineHeight: 16 },
+  input:      { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
+  readonlyField: {
+    borderWidth: 1.5, borderColor: colors.gray100, borderRadius: borderRadius.sm,
+    padding: spacing.md, backgroundColor: colors.gray50,
+  },
+  readonlyTxt: { fontSize: fontSize.md, color: colors.gray400 },
+  twoColRow:   { flexDirection: 'row', gap: spacing.md },
+  twoColItem:  { flex: 1 },
+
+  // Chip selects
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.xs },
+  chip: {
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: borderRadius.full, borderWidth: 1, borderColor: colors.gray200,
+  },
+  chipActive: { backgroundColor: colors.black, borderColor: colors.black },
+  chipTxt:    { fontSize: fontSize.xs, color: colors.gray600 },
+
+  // Tag inputs
+  tagInputRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center', marginBottom: spacing.sm },
+  tagAddBtn:   {
+    width: 40, height: 46, backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  selectedTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
+  removableTag: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.gray100, paddingLeft: spacing.sm + 2,
+    paddingRight: spacing.sm, paddingVertical: spacing.xs, borderRadius: borderRadius.full,
+    borderWidth: 1, borderColor: colors.gray200,
+  },
+  removableTagRed: { backgroundColor: colors.red50, borderColor: '#FCA5A5' },
+  removableTagTxt: { fontSize: fontSize.xs, color: colors.gray700, fontWeight: '500' },
+  noTagsTxt: { fontSize: fontSize.xs, color: colors.gray400, fontStyle: 'italic', marginTop: spacing.xs },
+
+  // Save
+  saveBtn:    { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl },
+  saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
+
   // Workout assignment rows
   workoutRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
   workoutRowSelected: { backgroundColor: colors.gray50 },

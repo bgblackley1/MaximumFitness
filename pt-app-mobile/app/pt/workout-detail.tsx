@@ -126,13 +126,9 @@ export default function WorkoutDetailScreen() {
     finally { setLoadingEx(false); }
   };
 
-  // ── FIX: guard back button so it never goes to the homepage ──
+  // ✅ FIX: Navigate directly to the Workouts tab — reliable for hidden tab screens
   const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/pt/workouts' as any);
-    }
+    router.navigate('/pt/workouts' as any);
   };
 
   const handleSave = async () => {
@@ -155,6 +151,7 @@ export default function WorkoutDetailScreen() {
       };
       if (isNew) {
         const res = await API.post('/workout-plans', payload);
+        // Stay on this screen, now in edit mode for the new plan
         router.replace(`/pt/workout-detail?id=${res.data.plan_id}` as any);
       } else {
         await API.put(`/workout-plans/${id}`, payload);
@@ -165,11 +162,11 @@ export default function WorkoutDetailScreen() {
     } finally { setSaving(false); }
   };
 
+  // ✅ FIX: After archive navigate to workouts tab
   const handleArchive = async () => {
     try {
       await API.delete(`/workout-plans/${id}`);
-      if (router.canGoBack()) router.back();
-      else router.replace('/pt/workouts' as any);
+      router.navigate('/pt/workouts' as any);
     } catch (e) { console.error('archive:', e); }
     finally { setArchiveConfirm(false); }
   };
@@ -280,7 +277,6 @@ export default function WorkoutDetailScreen() {
     <SafeAreaView style={styles.container}>
       {/* Top bar */}
       <View style={styles.topBar}>
-        {/* ✅ FIX: canGoBack guard ensures we go to workouts tab, not homepage */}
         <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
           <Ionicons name="arrow-back" size={22} color={colors.black} />
         </TouchableOpacity>
@@ -308,7 +304,7 @@ export default function WorkoutDetailScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Title */}
+        {/* Title input */}
         <TextInput
           style={styles.titleInput}
           value={title}
@@ -320,10 +316,8 @@ export default function WorkoutDetailScreen() {
         {/* Focus selector */}
         <Text style={styles.sectionLabel}>FOCUS</Text>
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.focusScroll}
-          contentContainerStyle={{ gap: spacing.sm }}
+          horizontal showsHorizontalScrollIndicator={false}
+          style={styles.focusScroll} contentContainerStyle={{ gap: spacing.sm }}
         >
           {FOCUS_OPTIONS.map((opt) => (
             <TouchableOpacity
@@ -390,9 +384,7 @@ export default function WorkoutDetailScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.exName}>{ex.name}</Text>
                 {ex.muscle_group ? <Text style={styles.exMuscle}>{ex.muscle_group}</Text> : null}
-                <Text style={styles.exDetail}>
-                  {ex.sets} sets × {ex.reps}  ·  {ex.rest_seconds}s rest
-                </Text>
+                <Text style={styles.exDetail}>{ex.sets} sets × {ex.reps}  ·  {ex.rest_seconds}s rest</Text>
                 {ex.notes ? <Text style={styles.exNotes} numberOfLines={1}>{ex.notes}</Text> : null}
               </View>
               <View style={styles.exActions}>
@@ -453,7 +445,7 @@ export default function WorkoutDetailScreen() {
             {showCreateEx ? (
               <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }} keyboardShouldPersistTaps="handled">
                 <Text style={styles.createExHint}>
-                  The new exercise will be saved to your library and immediately added to this workout.
+                  The new exercise will be saved to your library and added to this workout immediately.
                 </Text>
                 <Text style={styles.fieldLabel}>Exercise Name *</Text>
                 <TextInput style={styles.input} value={newExForm.name} onChangeText={(v) => setNewExForm((f) => ({ ...f, name: v }))} placeholder="e.g. Barbell Bicep Curl" placeholderTextColor={colors.gray400} autoFocus />
@@ -496,7 +488,7 @@ export default function WorkoutDetailScreen() {
                   <ActivityIndicator color={colors.black} style={{ padding: spacing.xxxl }} />
                 ) : filteredLibrary.length === 0 ? (
                   <View style={styles.pickerEmpty}>
-                    <Text style={styles.pickerEmptyTxt}>{exSearch ? 'No exercises match your search.' : 'No exercises in your library yet.'}</Text>
+                    <Text style={styles.pickerEmptyTxt}>{exSearch ? 'No exercises match your search.' : 'No exercises yet.'}</Text>
                     <TouchableOpacity style={styles.pickerEmptyBtn} onPress={() => setShowCreateEx(true)}>
                       <Text style={styles.pickerEmptyBtnTxt}>Create First Exercise →</Text>
                     </TouchableOpacity>
@@ -506,7 +498,12 @@ export default function WorkoutDetailScreen() {
                     {filteredLibrary.map((ex) => {
                       const alreadyAdded = exercises.some((e) => e.exercise_id === ex.id);
                       return (
-                        <TouchableOpacity key={ex.id} style={[styles.pickerRow, alreadyAdded && styles.pickerRowAdded]} onPress={() => !alreadyAdded && addExercise(ex)} activeOpacity={alreadyAdded ? 1 : 0.7}>
+                        <TouchableOpacity
+                          key={ex.id}
+                          style={[styles.pickerRow, alreadyAdded && styles.pickerRowAdded]}
+                          onPress={() => !alreadyAdded && addExercise(ex)}
+                          activeOpacity={alreadyAdded ? 1 : 0.7}
+                        >
                           <View style={styles.pickerIcon}><Ionicons name="barbell-outline" size={17} color={colors.gray500} /></View>
                           <View style={{ flex: 1 }}>
                             <Text style={styles.pickerName}>{ex.name}</Text>

@@ -29,22 +29,13 @@ async def get_my_client_profile(
         raise HTTPException(status_code=404, detail="Client profile not found")
     last_check_in = await client_service.get_last_check_in(db, client.id)
     return ClientResponse(
-        id=client.id,
-        user_id=client.user_id,
-        pt_id=client.pt_id,
-        name=client.user.name,
-        email=client.user.email,
-        age=client.age,
-        sex=client.sex,
-        height_cm=client.height_cm,
+        id=client.id, user_id=client.user_id, pt_id=client.pt_id,
+        name=client.user.name, email=client.user.email, phone=client.user.phone,
+        age=client.age, sex=client.sex, height_cm=client.height_cm,
         starting_weight_kg=client.starting_weight_kg,
-        goals=client.goals,
-        injuries=client.injuries,
-        notes=client.notes,
-        status=client.status,
-        plan_type=client.plan_type,
-        created_at=client.created_at,
-        last_check_in=last_check_in,
+        goals=client.goals, injuries=client.injuries, notes=client.notes,
+        status=client.status, plan_type=client.plan_type,
+        created_at=client.created_at, last_check_in=last_check_in,
     )
 
 
@@ -65,7 +56,7 @@ async def list_clients(
         last_check_in = await client_service.get_last_check_in(db, c.id)
         results.append(ClientResponse(
             id=c.id, user_id=c.user_id, pt_id=c.pt_id,
-            name=c.user.name, email=c.user.email,
+            name=c.user.name, email=c.user.email, phone=c.user.phone,
             age=c.age, sex=c.sex, height_cm=c.height_cm,
             starting_weight_kg=c.starting_weight_kg,
             goals=c.goals, injuries=c.injuries, notes=c.notes,
@@ -83,26 +74,18 @@ async def create_client(
 ):
     client_profile, temp_password = await client_service.create_client(
         db, pt_id=pt.id,
-        name=body.name,
-        email=body.email,
-        phone=body.phone,                   # ← ADD
-        age=body.age,
-        sex=body.sex,
-        height_cm=body.height_cm,
-        starting_weight_kg=body.starting_weight_kg,
-        goals=body.goals,
-        injuries=body.injuries,
-        notes=body.notes,
+        name=body.name, email=body.email, phone=body.phone,
+        age=body.age, sex=body.sex,
+        height_cm=body.height_cm, starting_weight_kg=body.starting_weight_kg,
+        goals=body.goals, injuries=body.injuries, notes=body.notes,
     )
     return {
         "id": str(client_profile.id),
         "user_id": str(client_profile.user_id),
         "pt_id": str(client_profile.pt_id),
-        "name": body.name,
-        "email": body.email,
+        "name": body.name, "email": body.email,
         "status": client_profile.status,
         "created_at": client_profile.created_at.isoformat(),
-        # ← PT sees this once so they can share it with the client
         "temp_password": temp_password,
         "message": f"Client created. Share these login details: email={body.email}, password={temp_password}",
     }
@@ -120,7 +103,7 @@ async def get_client(
     last_check_in = await client_service.get_last_check_in(db, client.id)
     return ClientResponse(
         id=client.id, user_id=client.user_id, pt_id=client.pt_id,
-        name=client.user.name, email=client.user.email,
+        name=client.user.name, email=client.user.email, phone=client.user.phone,
         age=client.age, sex=client.sex, height_cm=client.height_cm,
         starting_weight_kg=client.starting_weight_kg,
         goals=client.goals, injuries=client.injuries, notes=client.notes,
@@ -139,12 +122,32 @@ async def update_client(
     client = await client_service.get_client_by_id(db, client_id, pt.id)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+
     update_data = body.model_dump(exclude_unset=True)
+
+    # ── Update User model fields (name, phone) ────────────────────────────────
+    # get_client_by_id loads the user via selectinload so client.user is available
+    if ('name' in update_data or 'phone' in update_data) and client.user:
+        if 'name' in update_data and update_data['name']:
+            client.user.name  = update_data.pop('name')
+        else:
+            update_data.pop('name', None)
+        if 'phone' in update_data:
+            client.user.phone = update_data.pop('phone')
+        await db.flush()
+    else:
+        update_data.pop('name',  None)
+        update_data.pop('phone', None)
+
+    # ── Update ClientProfile fields ───────────────────────────────────────────
     updated = await client_service.update_client(db, client, **update_data)
     last_check_in = await client_service.get_last_check_in(db, updated.id)
+
     return ClientResponse(
         id=updated.id, user_id=updated.user_id, pt_id=updated.pt_id,
-        name=updated.user.name, email=updated.user.email,
+        name=updated.user.name   if updated.user else '',
+        email=updated.user.email if updated.user else '',
+        phone=updated.user.phone if updated.user else None,
         age=updated.age, sex=updated.sex, height_cm=updated.height_cm,
         starting_weight_kg=updated.starting_weight_kg,
         goals=updated.goals, injuries=updated.injuries, notes=updated.notes,
