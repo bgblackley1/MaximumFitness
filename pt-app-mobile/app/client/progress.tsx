@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, Image, ActivityIndicator, Modal, TextInput, Alert,
+  Platform, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,22 +15,34 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
 type Tab = 'measurements' | 'goals' | 'photos';
 
+const SCREEN_WIDTH = Dimensions.get('window').width;
+
 export default function ProgressScreen() {
   const { clientProfileId, token } = useAuthStore();
+
   const [activeTab, setActiveTab]       = useState<Tab>('measurements');
   const [measurements, setMeasurements] = useState<any[]>([]);
   const [goals, setGoals]               = useState<any[]>([]);
   const [photos, setPhotos]             = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
-  const [mModal,  setMModal]            = useState(false);
-  const [mSaving, setMSaving]           = useState(false);
+
+  // Measurement modal
+  const [mModal,  setMModal]  = useState(false);
+  const [mSaving, setMSaving] = useState(false);
   const [mForm, setMForm] = useState({
     date: new Date().toISOString().split('T')[0],
     weight_kg: '', chest_cm: '', waist_cm: '',
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
+
+  // Photo upload
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  // ── NEW: Photo viewer state ──
+  const [viewerPhoto,   setViewerPhoto]   = useState<any | null>(null);
+  const [deletingPhoto, setDeletingPhoto] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (clientProfileId) loadAll();
@@ -88,19 +101,14 @@ export default function ProgressScreen() {
     }
   };
 
-  // ════════════════════════════════════════════════════════════════════
-  // PHOTO UPLOAD
+  // ════════════════════════════════════════════════════════════════════════════
+  // PHOTO UPLOAD — Platform-aware
   //
-  // WHY fetch() instead of axios:
-  //   axios has 'Content-Type: application/json' set at the instance level
-  //   in api.ts.  On React Native Web, per-request header overrides do NOT
-  //   reliably remove that instance default, so axios sends the wrong
-  //   Content-Type and FastAPI returns 422 Unprocessable Entity.
-  //
-  //   Native fetch() lets the browser/runtime set Content-Type automatically
-  //   when the body is a FormData, which includes the required boundary string.
-  //   This works correctly on iOS, Android, and web.
-  // ════════════════════════════════════════════════════════════════════
+  // On web, asset.uri is a blob: URL. Appending { uri, type, name } to FormData
+  // on web serialises it as the string "[object Object]" → FastAPI 422.
+  // Fix: on web, fetch the blob → create a real File → append.
+  // On native, the { uri, type, name } object trick works fine.
+  // ════════════════════════════════════════════════════════════════════════════
   const pickAndUploadPhoto = async () => {
     if (!clientProfileId) return;
 
@@ -123,59 +131,79 @@ export default function ProgressScreen() {
       const asset    = result.assets[0];
       const mimeType = asset.mimeType || 'image/jpeg';
       const ext      = mimeType.toLowerCase().includes('png') ? 'png' : 'jpg';
+      const fileName = `progress_photo.${ext}`;
+
+      const currentToken = token ?? useAuthStore.getState().token;
+      if (!currentToken) throw new Error('Not authenticated. Please log in again.');
+
+      const baseURL   = (API.defaults.baseURL as string) ?? 'http://127.0.0.1:8000';
+      const uploadURL = `${baseURL}/clients/${clientProfileId}/photos`;
 
       const formData = new FormData();
-      formData.append('file', {
-        uri:  asset.uri,
-        type: mimeType,
-        name: `progress_photo.${ext}`,
-      } as any);
 
-      // ── Use native fetch() — correctly handles FormData boundary on all platforms ──
-      const currentToken = token ?? useAuthStore.getState().token;
-      const baseURL      = API.defaults.baseURL ?? 'http://127.0.0.1:8000';
-      const url          = `${baseURL}/clients/${clientProfileId}/photos`;
+      if (Platform.OS === 'web') {
+        // ── Web: must convert blob: URI → real Blob → File ────────────────────
+        const blobResponse = await fetch(asset.uri);
+        if (!blobResponse.ok) throw new Error('Failed to read the selected image.');
+        const blob = await blobResponse.blob();
+        const file = new File([blob], fileName, { type: mimeType });
+        formData.append('file', file, fileName);
+      } else {
+        // ── Native (iOS / Android) ────────────────────────────────────────────
+        formData.append('file', { uri: asset.uri, type: mimeType, name: fileName } as any);
+      }
 
-      const response = await fetch(url, {
+      // Use native fetch() — do NOT set Content-Type (auto-set with boundary)
+      const response = await fetch(uploadURL, {
         method: 'POST',
-        headers: {
-          // Authorization is the ONLY header we set.
-          // Do NOT set Content-Type — fetch sets it automatically with the
-          // correct multipart/form-data boundary when body is FormData.
-          Authorization: `Bearer ${currentToken}`,
-        },
+        headers: { Authorization: `Bearer ${currentToken}` },
         body: formData,
       });
 
       if (!response.ok) {
-        // Try to extract the FastAPI detail message
         let detail = `Upload failed (HTTP ${response.status})`;
         try {
-          const errorJson = await response.json();
-          detail = errorJson.detail || detail;
-        } catch { /* response wasn't JSON */ }
+          const errBody = await response.json();
+          if (typeof errBody?.detail === 'string') detail = errBody.detail;
+          else if (Array.isArray(errBody?.detail))
+            detail = errBody.detail.map((e: any) => e.msg ?? JSON.stringify(e)).join('; ');
+        } catch { /* body wasn't JSON */ }
         throw new Error(detail);
       }
 
       const data = await response.json();
+      // data.file_url is now a full resolved URL (backend fix above)
       setPhotos(prev => [data, ...prev]);
       Alert.alert('Uploaded!', 'Your progress photo has been saved.');
-    } catch (err: any) {
-      console.error('Photo upload error:', err.message ?? err);
-      Alert.alert(
-        'Upload Failed',
-        err.message || 'Could not upload photo. Please try again.',
-      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      console.error('Photo upload error:', msg);
+      Alert.alert('Upload Failed', msg || 'Could not upload photo. Please try again.');
     } finally {
       setUploadingPhoto(false);
+    }
+  };
+
+  // ── NEW: Delete photo ──────────────────────────────────────────────────────
+  const handleDeletePhoto = async () => {
+    if (!viewerPhoto || !clientProfileId) return;
+    setDeletingPhoto(true);
+    try {
+      await API.delete(`/clients/${clientProfileId}/photos/${viewerPhoto.id}`);
+      setPhotos(prev => prev.filter((p) => p.id !== viewerPhoto.id));
+      setViewerPhoto(null);
+      setConfirmDelete(false);
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to delete photo.');
+    } finally {
+      setDeletingPhoto(false);
     }
   };
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
-  // ── Render helpers ────────────────────────────────────────────────────────
-
+  // ── Render: Measurements ───────────────────────────────────────────────────
   const renderMeasurements = () => {
     const weights      = measurements.filter((m) => m.weight_kg).map((m) => m.weight_kg);
     const latestWeight = weights[0];
@@ -214,7 +242,9 @@ export default function ProgressScreen() {
                         size={14}
                         color={weightDiff <= 0 ? colors.green700 : colors.red700}
                       />
-                      <Text style={[styles.diffTxt, { color: weightDiff <= 0 ? colors.green700 : colors.red700 }]}>
+                      <Text style={[styles.diffTxt, {
+                        color: weightDiff <= 0 ? colors.green700 : colors.red700,
+                      }]}>
                         {Math.abs(weightDiff).toFixed(1)} kg from last check-in
                       </Text>
                     </View>
@@ -253,6 +283,7 @@ export default function ProgressScreen() {
     );
   };
 
+  // ── Render: Goals ──────────────────────────────────────────────────────────
   const renderGoals = () => {
     if (goals.length === 0) {
       return (
@@ -316,6 +347,7 @@ export default function ProgressScreen() {
     });
   };
 
+  // ── Render: Photos ─────────────────────────────────────────────────────────
   const renderPhotos = () => (
     <>
       <TouchableOpacity
@@ -336,25 +368,33 @@ export default function ProgressScreen() {
           <Ionicons name="images-outline" size={48} color={colors.gray300} />
           <Text style={styles.emptyTitle}>No progress photos yet</Text>
           <Text style={styles.emptyText}>
-            Tap "Upload Photo" above or your trainer will add them at key milestones.
+            Tap "Upload Photo" above to add your first progress photo.
           </Text>
         </View>
       ) : (
-        <View style={styles.photoGrid}>
-          {photos.map((p) => (
-            <View key={p.id} style={styles.photoCell}>
-              <Image
-                source={{ uri: p.file_url }}
-                style={styles.photoImg}
-                resizeMode="cover"
-              />
-              <Text style={styles.photoDate}>{fmtDate(p.date)}</Text>
-              {p.notes ? (
-                <Text style={styles.photoNotes} numberOfLines={2}>{p.notes}</Text>
-              ) : null}
-            </View>
-          ))}
-        </View>
+        <>
+          <Text style={styles.photoHint}>Tap a photo to view or delete it</Text>
+          <View style={styles.photoGrid}>
+            {photos.map((p) => (
+              // ── NEW: Tap to open full-size viewer ──────────────────────────
+              <TouchableOpacity
+                key={p.id}
+                style={styles.photoCell}
+                onPress={() => { setViewerPhoto(p); setConfirmDelete(false); }}
+                activeOpacity={0.85}
+              >
+                <Image
+                  source={{ uri: p.file_url }}
+                  style={styles.photoImg}
+                  resizeMode="cover"
+                />
+                <View style={styles.photoOverlay}>
+                  <Text style={styles.photoDate}>{fmtDate(p.date)}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
       )}
     </>
   );
@@ -402,7 +442,77 @@ export default function ProgressScreen() {
         {activeTab === 'photos'       && renderPhotos()}
       </ScrollView>
 
-      {/* Log Measurement Modal */}
+      {/* ════════════════════════════════════════════════════════
+          PHOTO VIEWER MODAL (tap photo → full-size view + delete)
+      ════════════════════════════════════════════════════════ */}
+      <Modal
+        visible={!!viewerPhoto}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setViewerPhoto(null); setConfirmDelete(false); }}
+      >
+        <View style={styles.viewerOverlay}>
+          {/* Close button */}
+          <TouchableOpacity
+            style={styles.viewerClose}
+            onPress={() => { setViewerPhoto(null); setConfirmDelete(false); }}
+          >
+            <Ionicons name="close" size={28} color={colors.white} />
+          </TouchableOpacity>
+
+          {/* Full-size image */}
+          {viewerPhoto && (
+            <>
+              <Image
+                source={{ uri: viewerPhoto.file_url }}
+                style={styles.viewerImage}
+                resizeMode="contain"
+              />
+
+              {/* Date label */}
+              <View style={styles.viewerDateRow}>
+                <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.7)" />
+                <Text style={styles.viewerDate}>{fmtDate(viewerPhoto.date)}</Text>
+              </View>
+
+              {/* ── Delete section ── */}
+              {!confirmDelete ? (
+                <TouchableOpacity
+                  style={styles.viewerDeleteBtn}
+                  onPress={() => setConfirmDelete(true)}
+                >
+                  <Ionicons name="trash-outline" size={18} color={colors.red500} />
+                  <Text style={styles.viewerDeleteBtnTxt}>Delete Photo</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.viewerConfirmRow}>
+                  <Text style={styles.viewerConfirmTxt}>Delete this photo?</Text>
+                  <View style={styles.viewerConfirmBtns}>
+                    <TouchableOpacity
+                      style={styles.viewerCancelBtn}
+                      onPress={() => setConfirmDelete(false)}
+                      disabled={deletingPhoto}
+                    >
+                      <Text style={styles.viewerCancelBtnTxt}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.viewerConfirmDeleteBtn, deletingPhoto && { opacity: 0.6 }]}
+                      onPress={handleDeletePhoto}
+                      disabled={deletingPhoto}
+                    >
+                      {deletingPhoto
+                        ? <ActivityIndicator color={colors.white} size="small" />
+                        : <Text style={styles.viewerConfirmDeleteBtnTxt}>Delete</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      </Modal>
+
+      {/* ── Log Measurement Modal ── */}
       <Modal visible={mModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
@@ -473,9 +583,9 @@ export default function ProgressScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.gray50 },
-  header:    { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  title:     { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
+  container:  { flex: 1, backgroundColor: colors.gray50 },
+  header:     { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.sm },
+  title:      { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
   tabRow: {
     flexDirection: 'row', marginHorizontal: spacing.xl,
     backgroundColor: colors.white, borderRadius: borderRadius.sm,
@@ -519,11 +629,108 @@ const styles = StyleSheet.create({
   goalMetaValue:{ fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
   progressBar:  { height: 6, backgroundColor: colors.gray100, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
-  photoGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  photoCell:    { width: '48%' },
-  photoImg:     { width: '100%', aspectRatio: 0.75, borderRadius: borderRadius.sm, backgroundColor: colors.gray200 },
-  photoDate:    { fontSize: fontSize.xs, color: colors.gray500, marginTop: spacing.xs, fontWeight: '500' },
-  photoNotes:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+
+  // Photo grid
+  photoHint:  { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.md, textAlign: 'center' },
+  photoGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  photoCell:  { width: '48%', position: 'relative' },
+  photoImg:   { width: '100%', aspectRatio: 0.75, borderRadius: borderRadius.sm, backgroundColor: colors.gray200 },
+  photoOverlay: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderBottomLeftRadius: borderRadius.sm, borderBottomRightRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: spacing.xs,
+  },
+  photoDate:  { fontSize: fontSize.xs, color: colors.white, fontWeight: '500' },
+
+  // ── Photo viewer modal ──
+  viewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerClose: {
+    position: 'absolute',
+    top: 50,
+    right: spacing.xl,
+    zIndex: 10,
+    padding: spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: borderRadius.full,
+  },
+  viewerImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH * 1.2,
+    maxHeight: '65%',
+  },
+  viewerDateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.xl,
+  },
+  viewerDate: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+  },
+  viewerDeleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+    backgroundColor: 'rgba(239,68,68,0.15)',
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.red500 + '60',
+  },
+  viewerDeleteBtnTxt: {
+    color: colors.red500,
+    fontSize: fontSize.md,
+    fontWeight: '600',
+  },
+  viewerConfirmRow: {
+    alignItems: 'center',
+    marginTop: spacing.xl,
+    gap: spacing.md,
+  },
+  viewerConfirmTxt: {
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontWeight: '500',
+  },
+  viewerConfirmBtns: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  viewerCancelBtn: {
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  viewerCancelBtnTxt: {
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontWeight: '500',
+  },
+  viewerConfirmDeleteBtn: {
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.red500,
+  },
+  viewerConfirmDeleteBtnTxt: {
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontWeight: '600',
+  },
+
+  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalSheet:   { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '90%' },
   modalHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
