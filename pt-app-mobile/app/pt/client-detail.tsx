@@ -1,4 +1,3 @@
-// pt-app-mobile/app/pt/client-detail.tsx
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -17,22 +16,24 @@ export default function ClientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
 
-  const [client,       setClient]       = useState<any>(null);
-  const [measurements, setMeasurements] = useState<any[]>([]);
-  const [goals,        setGoals]        = useState<any[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [refreshing,   setRefreshing]   = useState(false);
+  const [client,          setClient]          = useState<any>(null);
+  const [measurements,    setMeasurements]    = useState<any[]>([]);
+  const [goals,           setGoals]           = useState<any[]>([]);
+  const [assignedWorkouts,setAssignedWorkouts]= useState<any[]>([]);
+  const [allWorkouts,     setAllWorkouts]     = useState<any[]>([]);
+  const [loading,         setLoading]         = useState(true);
+  const [refreshing,      setRefreshing]      = useState(false);
 
-  // ── Add Measurement modal ──
-  const [mModal,   setMModal]   = useState(false);
-  const [mSaving,  setMSaving]  = useState(false);
+  // Measure modal
+  const [mModal,  setMModal]  = useState(false);
+  const [mSaving, setMSaving] = useState(false);
   const [mForm, setMForm] = useState({
     date: new Date().toISOString().split('T')[0],
     weight_kg: '', chest_cm: '', waist_cm: '',
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
 
-  // ── Add Goal modal ──
+  // Goal modal
   const [gModal,  setGModal]  = useState(false);
   const [gSaving, setGSaving] = useState(false);
   const [gForm, setGForm] = useState({
@@ -41,18 +42,31 @@ export default function ClientDetailScreen() {
     target_date: '', current_value: '',
   });
 
+  // Workout assignment modal
+  const [workoutModal,   setWorkoutModal]   = useState(false);
+  const [selectedWorkoutIds, setSelectedWorkoutIds] = useState<string[]>([]);
+  const [savingWorkouts, setSavingWorkouts] = useState(false);
+
   useEffect(() => { if (id) loadData(); }, [id]);
 
   const loadData = async () => {
     try {
-      const [cR, mR, gR] = await Promise.allSettled([
+      const [cR, mR, gR, awR, wR] = await Promise.allSettled([
         API.get(`/clients/${id}`),
         API.get(`/clients/${id}/measurements`),
         API.get(`/clients/${id}/goals`),
+        API.get('/workout-plans', { params: { client_id: id } }),
+        API.get('/workout-plans', { params: { status: 'active' } }),
       ]);
       if (cR.status === 'fulfilled') setClient(cR.value.data);
       if (mR.status === 'fulfilled') setMeasurements(mR.value.data);
       if (gR.status === 'fulfilled') setGoals(gR.value.data);
+      if (awR.status === 'fulfilled') {
+        const aw = awR.value.data;
+        setAssignedWorkouts(aw);
+        setSelectedWorkoutIds(aw.map((w: any) => w.id));
+      }
+      if (wR.status === 'fulfilled') setAllWorkouts(wR.value.data);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
@@ -69,19 +83,18 @@ export default function ClientDetailScreen() {
     setMSaving(true);
     try {
       const payload: any = { date: mForm.date };
-      const nums = ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm'];
-      nums.forEach(k => {
+      ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm'].forEach((k) => {
         const v = (mForm as any)[k];
         if (v !== '') payload[k] = parseFloat(v);
       });
       if (mForm.notes) payload.notes = mForm.notes;
       const res = await API.post(`/clients/${id}/measurements`, payload);
-      setMeasurements(prev => [res.data, ...prev]);
+      setMeasurements((prev) => [res.data, ...prev]);
       setMModal(false);
       setMForm({ date: new Date().toISOString().split('T')[0], weight_kg: '', chest_cm: '',
         waist_cm: '', left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '' });
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to save measurement');
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
     } finally { setMSaving(false); }
   };
 
@@ -101,16 +114,50 @@ export default function ClientDetailScreen() {
       if (gForm.target_date)   payload.target_date   = gForm.target_date;
       if (gForm.current_value) payload.current_value = parseFloat(gForm.current_value);
       const res = await API.post(`/clients/${id}/goals`, payload);
-      setGoals(prev => [res.data, ...prev]);
+      setGoals((prev) => [res.data, ...prev]);
       setGModal(false);
       setGForm({ description: '', type: 'weight', target_value: '', target_unit: 'kg', target_date: '', current_value: '' });
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to save goal');
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save');
     } finally { setGSaving(false); }
+  };
+
+  // ── Save workout assignments ──────────────────────────────────────────────
+  const saveWorkoutAssignments = async () => {
+    setSavingWorkouts(true);
+    try {
+      await API.put(`/workout-plans/assignments/by-client/${id}`, {
+        workout_ids: selectedWorkoutIds,
+      });
+      // Refresh assigned workouts
+      const res = await API.get('/workout-plans', { params: { client_id: id } });
+      setAssignedWorkouts(res.data);
+      setWorkoutModal(false);
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.detail || 'Failed to save workout assignments');
+    } finally {
+      setSavingWorkouts(false);
+    }
+  };
+
+  const toggleWorkout = (wid: string) => {
+    setSelectedWorkoutIds((prev) =>
+      prev.includes(wid) ? prev.filter((x) => x !== wid) : [...prev, wid]
+    );
+  };
+
+  const openWorkoutModal = () => {
+    setSelectedWorkoutIds(assignedWorkouts.map((w) => w.id));
+    setWorkoutModal(true);
   };
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const FOCUS_LABELS: Record<string, string> = {
+    arms: 'Arms', legs: 'Legs', push: 'Push', pull: 'Pull',
+    back: 'Back', chest: 'Chest', core: 'Core', full_body: 'Full Body', cardio: 'Cardio',
+  };
 
   if (loading) return <LoadingScreen />;
   if (!client) {
@@ -136,7 +183,7 @@ export default function ClientDetailScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Profile Card */}
+        {/* Profile card */}
         <Card style={styles.profileCard}>
           <View style={styles.profileTop}>
             <View style={styles.avatar}>
@@ -153,11 +200,11 @@ export default function ClientDetailScreen() {
           </View>
           <View style={styles.statsRow}>
             {[
-              { label: 'Age',    value: client.age ? `${client.age}` : '—' },
-              { label: 'Sex',    value: client.sex ?? '—' },
-              { label: 'Height', value: client.height_cm ? `${client.height_cm}cm` : '—' },
+              { label: 'Age',    value: client.age           ? `${client.age}`           : '—' },
+              { label: 'Sex',    value: client.sex           ?? '—'                           },
+              { label: 'Height', value: client.height_cm     ? `${client.height_cm}cm`   : '—' },
               { label: 'Weight', value: client.starting_weight_kg ? `${client.starting_weight_kg}kg` : '—' },
-            ].map(s => (
+            ].map((s) => (
               <View key={s.label} style={styles.statItem}>
                 <Text style={styles.statLabel}>{s.label}</Text>
                 <Text style={styles.statValue}>{s.value}</Text>
@@ -172,27 +219,58 @@ export default function ClientDetailScreen() {
           )}
         </Card>
 
-        {/* Quick Actions */}
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push(`/pt/workouts?client_id=${id}` as any)}
-          >
-            <Ionicons name="barbell-outline" size={18} color={colors.black} />
-            <Text style={styles.actionBtnTxt}>Plans</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push(`/pt/calendar?client_id=${id}` as any)}
-          >
-            <Ionicons name="calendar-outline" size={18} color={colors.black} />
-            <Text style={styles.actionBtnTxt}>Bookings</Text>
+        {/* ── Assigned Workouts ── */}
+        <View style={styles.sectionHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>Assigned Workouts</Text>
+            <Text style={styles.sectionSub}>
+              {assignedWorkouts.length} workout{assignedWorkouts.length !== 1 ? 's' : ''} assigned
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.manageBtn} onPress={openWorkoutModal}>
+            <Ionicons name="settings-outline" size={14} color={colors.white} />
+            <Text style={styles.manageBtnTxt}>Manage</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Goals Section */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Goals</Text>
+        {assignedWorkouts.length === 0 ? (
+          <Card style={styles.emptyWorkoutsCard}>
+            <Ionicons name="barbell-outline" size={32} color={colors.gray300} />
+            <Text style={styles.emptyWorkoutsTxt}>No workouts assigned yet</Text>
+            <TouchableOpacity style={styles.assignNowBtn} onPress={openWorkoutModal}>
+              <Text style={styles.assignNowBtnTxt}>Assign Workouts →</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : (
+          <View style={styles.workoutGrid}>
+            {assignedWorkouts.map((w) => (
+              <TouchableOpacity
+                key={w.id}
+                style={styles.workoutCard}
+                onPress={() => router.push(`/pt/workout-detail?id=${w.id}` as any)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.workoutCardTitle}>{w.title}</Text>
+                {w.focus ? (
+                  <View style={styles.workoutFocusBadge}>
+                    <Text style={styles.workoutFocusTxt}>
+                      {FOCUS_LABELS[w.focus] ?? w.focus}
+                    </Text>
+                  </View>
+                ) : null}
+                <Text style={styles.workoutExCount}>
+                  {w.exercise_count ?? 0} exercise{(w.exercise_count ?? 0) !== 1 ? 's' : ''}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* ── Goals ── */}
+        <View style={[styles.sectionHeader, { marginTop: spacing.xl }]}>
+          <View>
+            <Text style={styles.sectionTitle}>Goals</Text>
+          </View>
           <TouchableOpacity style={styles.addIcon} onPress={() => setGModal(true)}>
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
@@ -207,9 +285,7 @@ export default function ClientDetailScreen() {
                   <Text style={styles.goalDesc}>{goal.description}</Text>
                   <Text style={styles.goalMeta}>
                     Target: {goal.target_value} {goal.target_unit}
-                    {goal.current_value != null
-                      ? ` · Current: ${goal.current_value} ${goal.target_unit}`
-                      : ''}
+                    {goal.current_value != null ? ` · Current: ${goal.current_value} ${goal.target_unit}` : ''}
                     {goal.target_date ? ` · Due: ${fmtDate(goal.target_date)}` : ''}
                   </Text>
                 </View>
@@ -222,9 +298,11 @@ export default function ClientDetailScreen() {
           ))
         )}
 
-        {/* Measurements Section */}
+        {/* ── Measurements ── */}
         <View style={[styles.sectionHeader, { marginTop: spacing.xl }]}>
-          <Text style={styles.sectionTitle}>Measurements</Text>
+          <View>
+            <Text style={styles.sectionTitle}>Measurements</Text>
+          </View>
           <TouchableOpacity style={styles.addIcon} onPress={() => setMModal(true)}>
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
@@ -232,7 +310,7 @@ export default function ClientDetailScreen() {
         {measurements.length === 0 ? (
           <Card><Text style={styles.emptyText}>No measurements recorded yet.</Text></Card>
         ) : (
-          measurements.slice(0, 8).map((m) => (
+          measurements.slice(0, 6).map((m) => (
             <Card key={m.id} style={styles.measureCard}>
               <Text style={styles.measureDate}>{fmtDate(m.date)}</Text>
               <View style={styles.metricsRow}>
@@ -244,7 +322,7 @@ export default function ClientDetailScreen() {
                   { label: 'R. Arm',  value: m.right_arm_cm, unit: 'cm' },
                   { label: 'Thigh',   value: m.thigh_cm,     unit: 'cm' },
                   { label: 'Hips',    value: m.hips_cm,      unit: 'cm' },
-                ].filter(r => r.value != null).map(r => (
+                ].filter((r) => r.value != null).map((r) => (
                   <View key={r.label} style={styles.metricItem}>
                     <Text style={styles.metricLabel}>{r.label}</Text>
                     <Text style={styles.metricValue}>{r.value} {r.unit}</Text>
@@ -257,6 +335,86 @@ export default function ClientDetailScreen() {
         )}
       </ScrollView>
 
+      {/* ── Workout Assignment Modal ── */}
+      <Modal visible={workoutModal} transparent animationType="slide">
+        <View style={styles.overlay}>
+          <View style={styles.modalBox}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>Assign Workouts</Text>
+              <TouchableOpacity onPress={() => setWorkoutModal(false)}>
+                <Ionicons name="close" size={24} color={colors.gray600} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalHint}>
+              Select which workouts {client.name} should have access to.
+              Unticking removes their access.
+            </Text>
+            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+              {allWorkouts.length === 0 ? (
+                <View style={styles.noWorkoutsWrap}>
+                  <Text style={styles.noWorkoutsTxt}>
+                    No active workouts in your library yet.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.createWorkoutBtn}
+                    onPress={() => {
+                      setWorkoutModal(false);
+                      router.push('/pt/workout-detail' as any);
+                    }}
+                  >
+                    <Text style={styles.createWorkoutBtnTxt}>Create a Workout →</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                allWorkouts.map((w) => {
+                  const isSelected = selectedWorkoutIds.includes(w.id);
+                  return (
+                    <TouchableOpacity
+                      key={w.id}
+                      style={[styles.workoutRow, isSelected && styles.workoutRowSelected]}
+                      onPress={() => toggleWorkout(w.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.workoutRowAvatar, isSelected && { backgroundColor: colors.black }]}>
+                        <Ionicons name="barbell-outline" size={16} color={isSelected ? colors.white : colors.gray500} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.workoutRowTitle}>{w.title}</Text>
+                        <Text style={styles.workoutRowMeta}>
+                          {w.focus ? `${FOCUS_LABELS[w.focus] ?? w.focus}  ·  ` : ''}
+                          {w.exercise_count ?? 0} exercise{(w.exercise_count ?? 0) !== 1 ? 's' : ''}
+                        </Text>
+                      </View>
+                      <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+                        {isSelected && <Ionicons name="checkmark" size={13} color={colors.white} />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+              {allWorkouts.length > 0 && (
+                <>
+                  <Text style={styles.selectedCount}>
+                    {selectedWorkoutIds.length === 0
+                      ? 'No workouts selected'
+                      : `${selectedWorkoutIds.length} workout${selectedWorkoutIds.length !== 1 ? 's' : ''} selected`}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.saveBtn, savingWorkouts && { opacity: 0.6 }]}
+                    onPress={saveWorkoutAssignments}
+                    disabled={savingWorkouts}
+                  >
+                    {savingWorkouts
+                      ? <ActivityIndicator color={colors.white} />
+                      : <Text style={styles.saveBtnTxt}>Save Assignments</Text>}
+                  </TouchableOpacity>
+                </>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Add Measurement Modal ── */}
       <Modal visible={mModal} transparent animationType="slide">
         <View style={styles.overlay}>
@@ -268,16 +426,14 @@ export default function ClientDetailScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-              {/* Date */}
               <Text style={styles.fieldLabel}>Date</Text>
               <TextInput
                 style={styles.input}
                 value={mForm.date}
-                onChangeText={v => setMForm(f => ({ ...f, date: v }))}
+                onChangeText={(v) => setMForm((f) => ({ ...f, date: v }))}
                 placeholder="YYYY-MM-DD"
                 placeholderTextColor={colors.gray400}
               />
-              {/* Two-column grid for metrics */}
               {[
                 ['Weight (kg)', 'weight_kg'], ['Chest (cm)', 'chest_cm'],
                 ['Waist (cm)', 'waist_cm'],   ['L. Arm (cm)', 'left_arm_cm'],
@@ -289,7 +445,7 @@ export default function ClientDetailScreen() {
                   <TextInput
                     style={styles.input}
                     value={(mForm as any)[key]}
-                    onChangeText={v => setMForm(f => ({ ...f, [key]: v }))}
+                    onChangeText={(v) => setMForm((f) => ({ ...f, [key]: v }))}
                     placeholder="Optional"
                     placeholderTextColor={colors.gray400}
                     keyboardType="decimal-pad"
@@ -300,7 +456,7 @@ export default function ClientDetailScreen() {
               <TextInput
                 style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
                 value={mForm.notes}
-                onChangeText={v => setMForm(f => ({ ...f, notes: v }))}
+                onChangeText={(v) => setMForm((f) => ({ ...f, notes: v }))}
                 placeholder="Optional"
                 placeholderTextColor={colors.gray400}
                 multiline
@@ -334,21 +490,19 @@ export default function ClientDetailScreen() {
               <TextInput
                 style={styles.input}
                 value={gForm.description}
-                onChangeText={v => setGForm(f => ({ ...f, description: v }))}
+                onChangeText={(v) => setGForm((f) => ({ ...f, description: v }))}
                 placeholder="e.g. Lose 10kg by summer"
                 placeholderTextColor={colors.gray400}
               />
               <Text style={styles.fieldLabel}>Type</Text>
               <View style={styles.chipRow}>
-                {['weight', 'strength', 'movement', 'custom'].map(t => (
+                {['weight', 'strength', 'movement', 'custom'].map((t) => (
                   <TouchableOpacity
                     key={t}
                     style={[styles.chip, gForm.type === t && styles.chipActive]}
-                    onPress={() => setGForm(f => ({ ...f, type: t }))}
+                    onPress={() => setGForm((f) => ({ ...f, type: t }))}
                   >
-                    <Text style={[styles.chipTxt, gForm.type === t && { color: colors.white }]}>
-                      {t}
-                    </Text>
+                    <Text style={[styles.chipTxt, gForm.type === t && { color: colors.white }]}>{t}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -356,22 +510,20 @@ export default function ClientDetailScreen() {
               <TextInput
                 style={styles.input}
                 value={gForm.target_value}
-                onChangeText={v => setGForm(f => ({ ...f, target_value: v }))}
+                onChangeText={(v) => setGForm((f) => ({ ...f, target_value: v }))}
                 placeholder="e.g. 80"
                 placeholderTextColor={colors.gray400}
                 keyboardType="decimal-pad"
               />
               <Text style={styles.fieldLabel}>Unit</Text>
               <View style={styles.chipRow}>
-                {['kg', 'lbs', 'reps', 'mins', '%', 'other'].map(u => (
+                {['kg', 'lbs', 'reps', 'mins', '%', 'other'].map((u) => (
                   <TouchableOpacity
                     key={u}
                     style={[styles.chip, gForm.target_unit === u && styles.chipActive]}
-                    onPress={() => setGForm(f => ({ ...f, target_unit: u }))}
+                    onPress={() => setGForm((f) => ({ ...f, target_unit: u }))}
                   >
-                    <Text style={[styles.chipTxt, gForm.target_unit === u && { color: colors.white }]}>
-                      {u}
-                    </Text>
+                    <Text style={[styles.chipTxt, gForm.target_unit === u && { color: colors.white }]}>{u}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -379,7 +531,7 @@ export default function ClientDetailScreen() {
               <TextInput
                 style={styles.input}
                 value={gForm.current_value}
-                onChangeText={v => setGForm(f => ({ ...f, current_value: v }))}
+                onChangeText={(v) => setGForm((f) => ({ ...f, current_value: v }))}
                 placeholder="e.g. 90"
                 placeholderTextColor={colors.gray400}
                 keyboardType="decimal-pad"
@@ -388,7 +540,7 @@ export default function ClientDetailScreen() {
               <TextInput
                 style={styles.input}
                 value={gForm.target_date}
-                onChangeText={v => setGForm(f => ({ ...f, target_date: v }))}
+                onChangeText={(v) => setGForm((f) => ({ ...f, target_date: v }))}
                 placeholder="YYYY-MM-DD"
                 placeholderTextColor={colors.gray400}
               />
@@ -409,6 +561,11 @@ export default function ClientDetailScreen() {
   );
 }
 
+const FOCUS_LABELS: Record<string, string> = {
+  arms: 'Arms', legs: 'Legs', push: 'Push', pull: 'Pull',
+  back: 'Back', chest: 'Chest', core: 'Core', full_body: 'Full Body', cardio: 'Cardio',
+};
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray50 },
   header: {
@@ -420,8 +577,8 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: fontSize.lg, fontWeight: '600' },
   scroll: { padding: spacing.xl, paddingBottom: spacing.xxxl * 2 },
 
-  profileCard:  { marginBottom: spacing.lg },
-  profileTop:   { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xl },
+  profileCard: { marginBottom: spacing.lg },
+  profileTop:  { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xl },
   avatar: {
     width: 52, height: 52, borderRadius: borderRadius.full,
     backgroundColor: colors.black, alignItems: 'center',
@@ -445,29 +602,58 @@ const styles = StyleSheet.create({
   notesLabel: { fontSize: fontSize.xs, color: colors.gray400, marginBottom: spacing.xs },
   notesText:  { fontSize: fontSize.sm, color: colors.gray600, lineHeight: 20 },
 
-  actionRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xl },
-  actionBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: spacing.sm, backgroundColor: colors.white, borderRadius: borderRadius.sm,
-    borderWidth: 1, borderColor: colors.gray200, padding: spacing.lg,
-  },
-  actionBtnTxt: { fontSize: fontSize.sm, fontWeight: '500', color: colors.black },
-
+  // Section headers
   sectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: spacing.md,
+    alignItems: 'flex-start', marginBottom: spacing.md,
   },
   sectionTitle: { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
+  sectionSub:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
   addIcon: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center',
   },
+  manageBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.black, paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.sm + 1, borderRadius: borderRadius.sm,
+  },
+  manageBtnTxt: { fontSize: fontSize.xs, fontWeight: '600', color: colors.white },
 
+  // Workout grid
+  emptyWorkoutsCard: {
+    alignItems: 'center', gap: spacing.sm,
+    paddingVertical: spacing.xxl, marginBottom: spacing.lg,
+  },
+  emptyWorkoutsTxt: { fontSize: fontSize.sm, color: colors.gray500 },
+  assignNowBtn: {
+    backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  assignNowBtnTxt: { color: colors.white, fontSize: fontSize.sm, fontWeight: '600' },
+  workoutGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg,
+  },
+  workoutCard: {
+    width: '47%', backgroundColor: colors.black, borderRadius: borderRadius.md,
+    padding: spacing.lg, gap: spacing.xs,
+  },
+  workoutCardTitle:  { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
+  workoutFocusBadge: {
+    alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.full,
+  },
+  workoutFocusTxt: { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.8)', fontWeight: '600', textTransform: 'capitalize' },
+  workoutExCount: { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+
+  // Goals
   goalCard: { marginBottom: spacing.sm },
   goalRow:  { flexDirection: 'row', alignItems: 'center' },
   goalDesc: { fontSize: fontSize.md, fontWeight: '500', color: colors.black },
   goalMeta: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 4 },
 
+  // Measurements
   measureCard:  { marginBottom: spacing.sm },
   measureDate:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginBottom: spacing.sm },
   metricsRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
@@ -478,20 +664,27 @@ const styles = StyleSheet.create({
 
   emptyText: { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 
+  // Modals
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBox: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
-    maxHeight: '90%',
+    borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl,
+    maxHeight: '88%',
   },
   modalHead: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  modalHint: {
+    fontSize: fontSize.sm, color: colors.gray500, lineHeight: 20,
+    paddingHorizontal: spacing.xl, paddingTop: spacing.md,
+  },
   modalBody:  { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
+  fieldLabel: {
+    fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700,
+    marginTop: spacing.lg, marginBottom: spacing.sm,
+  },
   input: {
     borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.md, color: colors.black,
@@ -508,4 +701,33 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl,
   },
   saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
+
+  // Workout assignment modal rows
+  workoutRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.gray100,
+  },
+  workoutRowSelected: { backgroundColor: colors.gray50 },
+  workoutRowAvatar: {
+    width: 38, height: 38, borderRadius: 19, backgroundColor: colors.gray100,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  workoutRowTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
+  workoutRowMeta:  { fontSize: fontSize.xs, color: colors.gray400, marginTop: 1, textTransform: 'capitalize' },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
+    borderColor: colors.gray300, alignItems: 'center', justifyContent: 'center',
+  },
+  checkboxSelected: { backgroundColor: colors.black, borderColor: colors.black },
+  selectedCount: {
+    fontSize: fontSize.sm, color: colors.gray500,
+    textAlign: 'center', marginTop: spacing.lg, marginBottom: spacing.xs,
+  },
+  noWorkoutsWrap: { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.md },
+  noWorkoutsTxt:  { fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center' },
+  createWorkoutBtn: {
+    backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+  },
+  createWorkoutBtnTxt: { color: colors.white, fontSize: fontSize.sm, fontWeight: '600' },
 });

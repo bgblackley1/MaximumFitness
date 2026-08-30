@@ -9,326 +9,283 @@ from app.models.workout import WorkoutPlan, WorkoutPlanAssignment, PlanWeek, Pla
 from app.models.client import ClientProfile
 from app.middleware.auth import get_current_user, get_current_pt
 from app.schemas.workout import (
+    WorkoutCreate,
     WorkoutPlanCreate,
-    WorkoutPlanResponse,
-    WorkoutPlanSummary,
-    AssignedClientBasic,
     AssignPlanRequest,
+    SetClientWorkoutsRequest,
+    AssignedClientBasic,
 )
 
 router = APIRouter()
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _plan_eager_load():
+def _eager_load():
     return [
         selectinload(WorkoutPlan.weeks)
-        .selectinload(PlanWeek.days)
-        .selectinload(PlanDay.exercises)
-        .selectinload(PlanExercise.exercise),
+            .selectinload(PlanWeek.days)
+            .selectinload(PlanDay.exercises)
+            .selectinload(PlanExercise.exercise),
         selectinload(WorkoutPlan.assignments)
-        .selectinload(WorkoutPlanAssignment.client)
-        .selectinload(ClientProfile.user),
+            .selectinload(WorkoutPlanAssignment.client)
+            .selectinload(ClientProfile.user),
     ]
 
 
-def _build_assigned_clients(plan: WorkoutPlan) -> list[AssignedClientBasic]:
+def _flat_exercises(plan: WorkoutPlan) -> list[dict]:
+    """Extract all exercises across all weeks/days into a flat ordered list."""
     result = []
-    for asgn in plan.assignments:
-        if asgn.client and asgn.client.user:
-            result.append(
-                AssignedClientBasic(id=asgn.client_id, name=asgn.client.user.name)
-            )
+    for w in sorted(plan.weeks, key=lambda x: x.week_number):
+        for d in sorted(w.days, key=lambda x: x.day_order):
+            for e in sorted(d.exercises, key=lambda x: x.order):
+                result.append({
+                    "id":           str(e.id),
+                    "exercise_id":  str(e.exercise_id),
+                    "name":         e.exercise.name         if e.exercise else "Unknown",
+                    "muscle_group": e.exercise.muscle_group if e.exercise else None,
+                    "image_url":    e.exercise.image_url    if e.exercise else None,
+                    "order":        e.order,
+                    "sets":         e.sets,
+                    "reps":         e.reps,
+                    "rest_seconds": e.rest_seconds,
+                    "notes":        e.notes,
+                })
     return result
 
 
-async def _recreate_weeks(db: AsyncSession, plan: WorkoutPlan, weeks_data):
-    """Delete all child nodes and recreate from the provided data."""
-    for week in plan.weeks:
-        for day in week.days:
-            for ex in day.exercises:
-                await db.delete(ex)
-            await db.delete(day)
-        await db.delete(week)
+def _assigned_clients(plan: WorkoutPlan) -> list[dict]:
+    return [
+        {"id": str(a.client_id), "name": a.client.user.name}
+        for a in plan.assignments
+        if a.client and a.client.user
+    ]
+
+
+async def _create_flat_structure(
+    db: AsyncSession,
+    plan: WorkoutPlan,
+    exercises: list,
+):
+    """Create a single week + single day with the provided exercise list."""
+    # Delete existing structure
+    for w in plan.weeks:
+        for d in w.days:
+            for e in d.exercises:
+                await db.delete(e)
+            await db.delete(d)
+        await db.delete(w)
     await db.flush()
 
-    for week_data in weeks_data:
-        week = PlanWeek(plan_id=plan.id, week_number=week_data.week_number)
-        db.add(week)
-        await db.flush()
-        for day_data in week_data.days:
-            day = PlanDay(
-                week_id=week.id,
-                day_label=day_data.day_label,
-                day_order=day_data.day_order,
-            )
-            db.add(day)
-            await db.flush()
-            for ex_data in day_data.exercises:
-                db.add(PlanExercise(
-                    day_id=day.id,
-                    exercise_id=ex_data.exercise_id,
-                    order=ex_data.order,
-                    sets=ex_data.sets,
-                    reps=ex_data.reps,
-                    rest_seconds=ex_data.rest_seconds,
-                    notes=ex_data.notes,
-                    progression_rule=ex_data.progression_rule,
-                ))
+    week = PlanWeek(plan_id=plan.id, week_number=1)
+    db.add(week)
+    await db.flush()
+    day = PlanDay(week_id=week.id, day_label="Workout", day_order=1)
+    db.add(day)
+    await db.flush()
+    for i, ex in enumerate(exercises):
+        db.add(PlanExercise(
+            day_id=day.id,
+            exercise_id=ex.exercise_id,
+            order=i + 1,
+            sets=ex.sets,
+            reps=ex.reps,
+            rest_seconds=ex.rest_seconds,
+            notes=ex.notes,
+            progression_rule=getattr(ex, "progression_rule", None),
+        ))
     await db.flush()
 
 
-# ── List plans ────────────────────────────────────────────────────────────────
+def _plan_to_dict(plan: WorkoutPlan) -> dict:
+    exercises = _flat_exercises(plan)
+    return {
+        "id":               str(plan.id),
+        "title":            plan.title,
+        "focus":            plan.goal_focus,
+        "description":      None,
+        "visibility":       plan.visibility,
+        "status":           plan.status,
+        "created_at":       plan.created_at.isoformat(),
+        "exercise_count":   len(exercises),
+        "exercises":        exercises,
+        "assigned_clients": _assigned_clients(plan),
+    }
+
+
+# ── List workouts ─────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_plans(
-    client_id: uuid.UUID | None = Query(None),
-    plan_status: str | None = Query(None, alias="status"),
+async def list_workouts(
+    client_id:   uuid.UUID | None = Query(None),
+    plan_status: str | None       = Query(None, alias="status"),
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db:   AsyncSession = Depends(get_db),
 ):
     if user.role == "pt":
-        query = (
+        q = (
             select(WorkoutPlan)
             .where(WorkoutPlan.pt_id == user.id)
-            .options(*_plan_eager_load())
+            .options(*_eager_load())
             .order_by(WorkoutPlan.created_at.desc())
         )
         if plan_status:
-            query = query.where(WorkoutPlan.status == plan_status)
-        # Filter by assigned client if specified
+            q = q.where(WorkoutPlan.status == plan_status)
         if client_id:
-            query = query.join(
+            q = q.join(
                 WorkoutPlanAssignment,
                 and_(
-                    WorkoutPlanAssignment.plan_id == WorkoutPlan.id,
+                    WorkoutPlanAssignment.plan_id   == WorkoutPlan.id,
                     WorkoutPlanAssignment.client_id == client_id,
                 ),
             )
+        result = await db.execute(q)
+        return [_plan_to_dict(p) for p in result.scalars().all()]
 
-        result = await db.execute(query)
-        plans  = list(result.scalars().all())
-
-        return [
-            {
-                "id":              str(p.id),
-                "title":           p.title,
-                "goal_focus":      p.goal_focus,
-                "start_date":      str(p.start_date) if p.start_date else None,
-                "status":          p.status,
-                "visibility":      p.visibility,
-                "created_at":      p.created_at.isoformat(),
-                "assigned_clients": [
-                    {"id": str(a.client_id), "name": a.client.user.name}
-                    for a in p.assignments
-                    if a.client and a.client.user
-                ],
-            }
-            for p in plans
-        ]
-
-    # ── Client view: plans assigned via junction table ──
-    cp_result = await db.execute(
+    # Client view
+    cp = (await db.execute(
         select(ClientProfile).where(ClientProfile.user_id == user.id)
-    )
-    cp = cp_result.scalar_one_or_none()
+    )).scalar_one_or_none()
     if not cp:
-        raise HTTPException(status_code=404, detail="Client profile not found")
+        raise HTTPException(404, "Client profile not found")
 
-    asgn_result = await db.execute(
-        select(WorkoutPlanAssignment.plan_id).where(
-            WorkoutPlanAssignment.client_id == cp.id,
-            WorkoutPlanAssignment.status == "active",
-            WorkoutPlanAssignment.visibility == "client_visible",
-        )
-    )
-    plan_ids = [row[0] for row in asgn_result.fetchall()]
-
-    query = (
+    plan_ids = [
+        row[0] for row in (
+            await db.execute(
+                select(WorkoutPlanAssignment.plan_id).where(
+                    WorkoutPlanAssignment.client_id  == cp.id,
+                    WorkoutPlanAssignment.status     == "active",
+                    WorkoutPlanAssignment.visibility == "client_visible",
+                )
+            )
+        ).fetchall()
+    ]
+    q = (
         select(WorkoutPlan)
         .where(WorkoutPlan.id.in_(plan_ids), WorkoutPlan.status == "active")
+        .options(*_eager_load())
         .order_by(WorkoutPlan.created_at.desc())
     )
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    result = await db.execute(q)
+    return [_plan_to_dict(p) for p in result.scalars().all()]
 
 
-# ── Create plan ───────────────────────────────────────────────────────────────
+# ── Create workout (flat) ─────────────────────────────────────────────────────
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_plan(
-    body: WorkoutPlanCreate,
+async def create_workout(
+    body: WorkoutCreate,
     pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
+    db:  AsyncSession = Depends(get_db),
 ):
     plan = WorkoutPlan(
         pt_id=pt.id,
         title=body.title,
-        goal_focus=body.goal_focus,
-        start_date=body.start_date,
-        visibility=body.visibility or "draft",
+        goal_focus=body.focus,
+        visibility=body.visibility,
         status="active",
     )
     db.add(plan)
     await db.flush()
-    await _recreate_weeks(db, plan, body.weeks)
-    return {"message": "Plan created", "plan_id": str(plan.id)}
+    await _create_flat_structure(db, plan, body.exercises)
+    return {"message": "Workout created", "plan_id": str(plan.id)}
 
 
-# ── Get single plan ───────────────────────────────────────────────────────────
+# ── Get single workout ────────────────────────────────────────────────────────
 
 @router.get("/{plan_id}")
-async def get_plan(
+async def get_workout(
     plan_id: uuid.UUID,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db:   AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(WorkoutPlan)
-        .where(WorkoutPlan.id == plan_id)
-        .options(*_plan_eager_load())
+        select(WorkoutPlan).where(WorkoutPlan.id == plan_id).options(*_eager_load())
     )
     plan = result.scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(404, "Workout not found")
 
     if user.role == "pt" and plan.pt_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your plan")
+        raise HTTPException(403, "Not your workout")
 
     if user.role == "client":
-        cp_res = await db.execute(
+        cp = (await db.execute(
             select(ClientProfile).where(ClientProfile.user_id == user.id)
-        )
-        cp = cp_res.scalar_one_or_none()
-        if not cp:
-            raise HTTPException(status_code=403, detail="Not your plan")
-        assigned_ids = [a.client_id for a in plan.assignments]
-        if cp.id not in assigned_ids:
-            raise HTTPException(status_code=403, detail="Not your plan")
+        )).scalar_one_or_none()
+        if not cp or cp.id not in [a.client_id for a in plan.assignments]:
+            raise HTTPException(403, "Not your workout")
 
-    return {
-        "id":         str(plan.id),
-        "pt_id":      str(plan.pt_id),
-        "title":      plan.title,
-        "goal_focus": plan.goal_focus,
-        "start_date": str(plan.start_date) if plan.start_date else None,
-        "visibility": plan.visibility,
-        "status":     plan.status,
-        "created_at": plan.created_at.isoformat(),
-        "updated_at": plan.updated_at.isoformat(),
-        "assigned_clients": [
-            {"id": str(a.client_id), "name": a.client.user.name}
-            for a in plan.assignments
-            if a.client and a.client.user
-        ],
-        "weeks": [
-            {
-                "id": str(w.id),
-                "week_number": w.week_number,
-                "days": [
-                    {
-                        "id": str(d.id),
-                        "day_label": d.day_label,
-                        "day_order": d.day_order,
-                        "exercises": [
-                            {
-                                "id":          str(e.id),
-                                "exercise_id": str(e.exercise_id),
-                                "order":       e.order,
-                                "sets":        e.sets,
-                                "reps":        e.reps,
-                                "rest_seconds":e.rest_seconds,
-                                "notes":       e.notes,
-                                "progression_rule": e.progression_rule,
-                                "exercise": {
-                                    "id":           str(e.exercise.id),
-                                    "name":         e.exercise.name,
-                                    "muscle_group": e.exercise.muscle_group,
-                                    "image_url":    e.exercise.image_url,
-                                    "cues":         e.exercise.cues,
-                                } if e.exercise else None,
-                            }
-                            for e in d.exercises
-                        ],
-                    }
-                    for d in w.days
-                ],
-            }
-            for w in plan.weeks
-        ],
-    }
+    return _plan_to_dict(plan)
 
 
-# ── Update plan ───────────────────────────────────────────────────────────────
+# ── Update workout ────────────────────────────────────────────────────────────
 
 @router.put("/{plan_id}")
-async def update_plan(
+async def update_workout(
     plan_id: uuid.UUID,
-    body: WorkoutPlanCreate,
+    body: WorkoutCreate,
     pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
+    db:  AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(WorkoutPlan)
         .where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
-        .options(*_plan_eager_load())
+        .options(*_eager_load())
     )
     plan = result.scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(404, "Workout not found")
 
     plan.title      = body.title
-    plan.goal_focus = body.goal_focus
-    plan.start_date = body.start_date
-    old_visibility  = plan.visibility
-    plan.visibility = body.visibility or plan.visibility
+    plan.goal_focus = body.focus
+    old_vis         = plan.visibility
+    plan.visibility = body.visibility
 
-    # Cascade visibility change to all assignments
-    if plan.visibility != old_visibility:
+    if plan.visibility != old_vis:
         for asgn in plan.assignments:
             asgn.visibility = plan.visibility
 
-    await _recreate_weeks(db, plan, body.weeks)
-    return {"message": "Plan updated"}
+    await _create_flat_structure(db, plan, body.exercises)
+    return {"message": "Workout updated"}
 
 
-# ── Archive plan ──────────────────────────────────────────────────────────────
+# ── Archive workout ───────────────────────────────────────────────────────────
 
 @router.delete("/{plan_id}")
-async def archive_plan(
+async def archive_workout(
     plan_id: uuid.UUID,
     pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
+    db:  AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(WorkoutPlan).where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
     )
     plan = result.scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(404, "Workout not found")
     plan.status = "archived"
     await db.flush()
-    return {"message": "Plan archived"}
+    return {"message": "Workout archived"}
 
 
-# ── Duplicate plan ────────────────────────────────────────────────────────────
+# ── Duplicate workout ─────────────────────────────────────────────────────────
 
 @router.post("/{plan_id}/duplicate")
-async def duplicate_plan(
+async def duplicate_workout(
     plan_id: uuid.UUID,
     pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
+    db:  AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(WorkoutPlan)
-        .where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
-        .options(*_plan_eager_load())
+        select(WorkoutPlan).where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
+        .options(*_eager_load())
     )
     plan = result.scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(404, "Workout not found")
 
+    exercises = _flat_exercises(plan)
     new_plan = WorkoutPlan(
         pt_id=pt.id,
         title=f"{plan.title} (Copy)",
@@ -339,77 +296,120 @@ async def duplicate_plan(
     db.add(new_plan)
     await db.flush()
 
-    for week in plan.weeks:
-        new_week = PlanWeek(plan_id=new_plan.id, week_number=week.week_number)
-        db.add(new_week)
-        await db.flush()
-        for day in week.days:
-            new_day = PlanDay(
-                week_id=new_week.id, day_label=day.day_label, day_order=day.day_order
-            )
-            db.add(new_day)
-            await db.flush()
-            for ex in day.exercises:
-                db.add(PlanExercise(
-                    day_id=new_day.id, exercise_id=ex.exercise_id,
-                    order=ex.order, sets=ex.sets, reps=ex.reps,
-                    rest_seconds=ex.rest_seconds, notes=ex.notes,
-                    progression_rule=ex.progression_rule,
-                ))
+    week = PlanWeek(plan_id=new_plan.id, week_number=1)
+    db.add(week)
     await db.flush()
-    return {"message": "Plan duplicated", "plan_id": str(new_plan.id)}
+    day = PlanDay(week_id=week.id, day_label="Workout", day_order=1)
+    db.add(day)
+    await db.flush()
+    for ex in exercises:
+        db.add(PlanExercise(
+            day_id=day.id, exercise_id=uuid.UUID(ex["exercise_id"]),
+            order=ex["order"], sets=ex["sets"], reps=ex["reps"],
+            rest_seconds=ex["rest_seconds"], notes=ex["notes"],
+        ))
+    await db.flush()
+    return {"message": "Workout duplicated", "plan_id": str(new_plan.id)}
 
 
-# ── Assign plan to clients (junction table — no copying) ──────────────────────
+# ── Assign workout to multiple clients ───────────────────────────────────────
 
 @router.post("/{plan_id}/assign")
-async def assign_plan_to_clients(
+async def assign_workout(
     plan_id: uuid.UUID,
     body: AssignPlanRequest,
     pt: User = Depends(get_current_pt),
-    db: AsyncSession = Depends(get_db),
+    db:  AsyncSession = Depends(get_db),
 ):
-    """
-    Replace the set of clients assigned to this plan.
-    Uses a junction table — the plan itself is never copied.
-    """
     result = await db.execute(
         select(WorkoutPlan).where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
     )
     plan = result.scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(404, "Workout not found")
 
-    # Verify all client_ids belong to this PT
-    valid_ids: list[uuid.UUID] = []
+    valid_ids = []
     for cid in body.client_ids:
-        cp_res = await db.execute(
-            select(ClientProfile).where(
-                ClientProfile.id == cid, ClientProfile.pt_id == pt.id
-            )
-        )
-        if cp_res.scalar_one_or_none():
+        if (await db.execute(
+            select(ClientProfile).where(ClientProfile.id == cid, ClientProfile.pt_id == pt.id)
+        )).scalar_one_or_none():
             valid_ids.append(cid)
 
-    # Replace all assignments for this plan atomically
     await db.execute(
-        sqla_delete(WorkoutPlanAssignment).where(
-            WorkoutPlanAssignment.plan_id == plan_id
-        )
+        sqla_delete(WorkoutPlanAssignment).where(WorkoutPlanAssignment.plan_id == plan_id)
     )
     await db.flush()
 
     for cid in valid_ids:
         db.add(WorkoutPlanAssignment(
-            plan_id=plan_id,
-            client_id=cid,
-            visibility=plan.visibility,
-            status="active",
+            plan_id=plan_id, client_id=cid,
+            visibility=plan.visibility, status="active",
         ))
     await db.flush()
 
     return {
-        "message":             f"Plan assigned to {len(valid_ids)} client(s)",
-        "assigned_client_ids": [str(cid) for cid in valid_ids],
-        "skipped":             len(body.client_ids) - len(valid_ids),
+        "message":             f"Assigned to {len(valid_ids)} client(s)",
+        "assigned_client_ids": [str(c) for c in valid_ids],
+    }
+
+
+# ── Set all workouts for one client (from client-detail) ─────────────────────
+
+@router.put("/assignments/by-client/{client_id}")
+async def set_workouts_for_client(
+    client_id: uuid.UUID,
+    body: SetClientWorkoutsRequest,
+    pt: User = Depends(get_current_pt),
+    db:  AsyncSession = Depends(get_db),
+):
+    # Verify client belongs to PT
+    cp = (await db.execute(
+        select(ClientProfile).where(
+            ClientProfile.id == client_id, ClientProfile.pt_id == pt.id
+        )
+    )).scalar_one_or_none()
+    if not cp:
+        raise HTTPException(404, "Client not found")
+
+    # Verify workout_ids belong to this PT and are active
+    valid_ids = []
+    for wid in body.workout_ids:
+        if (await db.execute(
+            select(WorkoutPlan).where(
+                WorkoutPlan.id == wid,
+                WorkoutPlan.pt_id == pt.id,
+                WorkoutPlan.status == "active",
+            )
+        )).scalar_one_or_none():
+            valid_ids.append(wid)
+
+    # Get all plan IDs for this PT (to know which assignments to touch)
+    pt_plan_ids = [
+        row[0] for row in (
+            await db.execute(select(WorkoutPlan.id).where(WorkoutPlan.pt_id == pt.id))
+        ).fetchall()
+    ]
+
+    # Replace assignments for this client (only for this PT's plans)
+    await db.execute(
+        sqla_delete(WorkoutPlanAssignment).where(
+            WorkoutPlanAssignment.client_id == client_id,
+            WorkoutPlanAssignment.plan_id.in_(pt_plan_ids),
+        )
+    )
+    await db.flush()
+
+    for wid in valid_ids:
+        plan_res = await db.execute(select(WorkoutPlan).where(WorkoutPlan.id == wid))
+        plan = plan_res.scalar_one_or_none()
+        if plan:
+            db.add(WorkoutPlanAssignment(
+                plan_id=wid, client_id=client_id,
+                visibility=plan.visibility, status="active",
+            ))
+    await db.flush()
+
+    return {
+        "message":     f"{len(valid_ids)} workout(s) assigned to client",
+        "workout_ids": [str(w) for w in valid_ids],
     }

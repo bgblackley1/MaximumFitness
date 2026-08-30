@@ -9,22 +9,31 @@ import API from '@/services/api';
 import Card from '@/components/Card';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
+const FOCUS_COLORS: Record<string, string> = {
+  arms: '#E0F2FE', legs: '#D1FAE5', push: '#FEF3C7', pull: '#FCE7F3',
+  back: '#EDE9FE', chest: '#FEE2E2', core: '#ECFDF5', full_body: '#F0FDF4', cardio: '#FFF7ED',
+};
+const FOCUS_TEXT: Record<string, string> = {
+  arms: '#0369A1', legs: '#065F46', push: '#92400E', pull: '#9D174D',
+  back: '#5B21B6', chest: '#991B1B', core: '#065F46', full_body: '#14532D', cardio: '#C2410C',
+};
+
 export default function MyWorkoutsScreen() {
-  const [plans, setPlans]       = useState<any[]>([]);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [planDetail, setPlanDetail] = useState<Record<string, any>>({});
-  const [loading, setLoading]   = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [workouts,    setWorkouts]    = useState<any[]>([]);
+  const [expanded,    setExpanded]    = useState<string | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
   const [loadingDetail, setLoadingDetail] = useState<string | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, any>>({});
 
-  useEffect(() => { loadPlans(); }, []);
+  useEffect(() => { loadWorkouts(); }, []);
 
-  const loadPlans = async () => {
+  const loadWorkouts = async () => {
     try {
       const res = await API.get('/workout-plans');
-      setPlans(res.data);
+      setWorkouts(res.data);
     } catch (e) {
-      console.error('loadPlans:', e);
+      console.error('loadWorkouts:', e);
     } finally {
       setLoading(false);
     }
@@ -32,26 +41,20 @@ export default function MyWorkoutsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadPlans();
+    await loadWorkouts();
     setRefreshing(false);
   };
 
-  const togglePlan = async (planId: string) => {
-    if (expanded === planId) {
-      setExpanded(null);
-      return;
-    }
-    setExpanded(planId);
-    if (!planDetail[planId]) {
-      setLoadingDetail(planId);
+  const toggleWorkout = async (wid: string) => {
+    if (expanded === wid) { setExpanded(null); return; }
+    setExpanded(wid);
+    if (!detailCache[wid]) {
+      setLoadingDetail(wid);
       try {
-        const res = await API.get(`/workout-plans/${planId}`);
-        setPlanDetail((prev) => ({ ...prev, [planId]: res.data }));
-      } catch (e) {
-        console.error('loadPlanDetail:', e);
-      } finally {
-        setLoadingDetail(null);
-      }
+        const res = await API.get(`/workout-plans/${wid}`);
+        setDetailCache((prev) => ({ ...prev, [wid]: res.data }));
+      } catch (e) { console.error(e); }
+      finally { setLoadingDetail(null); }
     }
   };
 
@@ -71,7 +74,7 @@ export default function MyWorkoutsScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>My Workouts</Text>
         <Text style={styles.subtitle}>
-          {plans.length} plan{plans.length !== 1 ? 's' : ''} assigned
+          {workouts.length} workout{workouts.length !== 1 ? 's' : ''} assigned
         </Text>
       </View>
 
@@ -79,39 +82,48 @@ export default function MyWorkoutsScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {plans.length === 0 ? (
+        {workouts.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="barbell-outline" size={56} color={colors.gray300} />
-            <Text style={styles.emptyTitle}>No workout plans yet</Text>
+            <Text style={styles.emptyTitle}>No workouts assigned yet</Text>
             <Text style={styles.emptyText}>
-              Your trainer will assign a plan once your programme begins.
+              Your trainer will assign workouts once your programme begins.
             </Text>
           </View>
         ) : (
-          plans.map((plan) => {
-            const isOpen   = expanded === plan.id;
-            const detail   = planDetail[plan.id];
-            const isLoadingThis = loadingDetail === plan.id;
+          workouts.map((w) => {
+            const isOpen    = expanded === w.id;
+            const detail    = detailCache[w.id];
+            const isLoading = loadingDetail === w.id;
+            const focusBg   = w.focus ? FOCUS_COLORS[w.focus] ?? colors.gray100 : null;
+            const focusFg   = w.focus ? FOCUS_TEXT[w.focus]   ?? colors.gray700 : null;
+            const focusTxt  = w.focus
+              ? w.focus.replace('_', ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+              : null;
 
             return (
-              <View key={plan.id} style={styles.planWrapper}>
-                {/* Plan header — tap to expand */}
+              <View key={w.id} style={styles.workoutWrapper}>
+                {/* Header */}
                 <TouchableOpacity
-                  style={[styles.planCard, isOpen && styles.planCardOpen]}
-                  onPress={() => togglePlan(plan.id)}
-                  activeOpacity={0.8}
+                  style={[styles.workoutCard, isOpen && styles.workoutCardOpen]}
+                  onPress={() => toggleWorkout(w.id)}
+                  activeOpacity={0.85}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.planTitle, isOpen && styles.textWhite]}>
-                      {plan.title}
-                    </Text>
-                    {plan.goal_focus ? (
-                      <Text style={[styles.planGoal, isOpen && { color: 'rgba(255,255,255,0.65)' }]}>
-                        {plan.goal_focus}
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <View style={styles.titleRow}>
+                      <Text style={[styles.workoutTitle, isOpen && styles.textWhite]}>
+                        {w.title}
                       </Text>
-                    ) : null}
-                    <Text style={[styles.planMeta, isOpen && { color: 'rgba(255,255,255,0.5)' }]}>
-                      Added {fmtDate(plan.created_at)}
+                      {focusTxt && focusBg && !isOpen && (
+                        <View style={[styles.focusPill, { backgroundColor: focusBg }]}>
+                          <Text style={[styles.focusPillTxt, { color: focusFg! }]}>{focusTxt}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={[styles.workoutMeta, isOpen && { color: 'rgba(255,255,255,0.55)' }]}>
+                      {w.exercise_count ?? 0} exercise{(w.exercise_count ?? 0) !== 1 ? 's' : ''}
+                      {w.focus && isOpen ? `  ·  ${focusTxt}` : ''}
+                      {'  ·  Added ' + fmtDate(w.created_at)}
                     </Text>
                   </View>
                   <Ionicons
@@ -121,66 +133,38 @@ export default function MyWorkoutsScreen() {
                   />
                 </TouchableOpacity>
 
-                {/* Expanded plan detail */}
+                {/* Expanded exercises */}
                 {isOpen && (
-                  <View style={styles.planBody}>
-                    {isLoadingThis ? (
+                  <View style={styles.exerciseBody}>
+                    {isLoading ? (
                       <ActivityIndicator color={colors.black} style={{ padding: spacing.xl }} />
                     ) : detail ? (
-                      detail.weeks.map((week: any) => (
-                        <View key={week.id} style={styles.week}>
-                          <Text style={styles.weekLabel}>Week {week.week_number}</Text>
-                          {week.days.map((day: any) => (
-                            <Card key={day.id} style={styles.dayCard}>
-                              <View style={styles.dayHeader}>
-                                <Ionicons name="calendar-outline" size={15} color={colors.gray500} />
-                                <Text style={styles.dayLabel}>{day.day_label}</Text>
-                              </View>
-                              {day.exercises.length === 0 ? (
-                                <Text style={styles.noExercises}>Rest day</Text>
-                              ) : (
-                                day.exercises.map((ex: any, idx: number) => (
-                                  <View key={ex.id} style={styles.exerciseRow}>
-                                    <View style={styles.exerciseNum}>
-                                      <Text style={styles.exerciseNumTxt}>{idx + 1}</Text>
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                      <Text style={styles.exerciseName}>
-                                        {ex.exercise?.name ?? 'Exercise'}
-                                      </Text>
-                                      <Text style={styles.exerciseMeta}>
-                                        {ex.sets} × {ex.reps}
-                                        {ex.rest_seconds
-                                          ? `  ·  ${ex.rest_seconds}s rest`
-                                          : ''}
-                                      </Text>
-                                      {ex.exercise?.muscle_group ? (
-                                        <View style={styles.tagRow}>
-                                          <View style={styles.tag}>
-                                            <Text style={styles.tagTxt}>
-                                              {ex.exercise.muscle_group}
-                                            </Text>
-                                          </View>
-                                        </View>
-                                      ) : null}
-                                      {ex.notes ? (
-                                        <Text style={styles.exerciseNotes}>{ex.notes}</Text>
-                                      ) : null}
-                                      {ex.exercise?.cues ? (
-                                        <Text style={styles.exerciseCues} numberOfLines={2}>
-                                          💡 {ex.exercise.cues}
-                                        </Text>
-                                      ) : null}
-                                    </View>
-                                  </View>
-                                ))
-                              )}
-                            </Card>
-                          ))}
-                        </View>
-                      ))
+                      (detail.exercises ?? []).length === 0 ? (
+                        <Text style={styles.noExTxt}>No exercises in this workout yet.</Text>
+                      ) : (
+                        (detail.exercises as any[]).map((ex, idx) => (
+                          <View key={ex.id ?? idx} style={styles.exRow}>
+                            <View style={styles.exNumBadge}>
+                              <Text style={styles.exNumTxt}>{idx + 1}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.exName}>{ex.name}</Text>
+                              {ex.muscle_group ? (
+                                <Text style={styles.exMuscle}>{ex.muscle_group}</Text>
+                              ) : null}
+                              <Text style={styles.exDetail}>
+                                {ex.sets} sets × {ex.reps}
+                                {ex.rest_seconds ? `  ·  ${ex.rest_seconds}s rest` : ''}
+                              </Text>
+                              {ex.notes ? (
+                                <Text style={styles.exNotes}>💡 {ex.notes}</Text>
+                              ) : null}
+                            </View>
+                          </View>
+                        ))
+                      )
                     ) : (
-                      <Text style={styles.errorTxt}>Could not load plan details.</Text>
+                      <Text style={styles.errorTxt}>Could not load exercises.</Text>
                     )}
                   </View>
                 )}
@@ -196,64 +180,53 @@ export default function MyWorkoutsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray50 },
   header: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md,
   },
   title:    { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
   subtitle: { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
   scroll:   { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
 
-  empty: { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm },
+  empty:      { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
-  emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
+  emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center', paddingHorizontal: spacing.xl },
 
-  planWrapper: { marginBottom: spacing.md },
-  planCard: {
+  workoutWrapper: { marginBottom: spacing.md },
+  workoutCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: colors.white, borderRadius: borderRadius.md,
     borderWidth: 1, borderColor: colors.gray200,
-    padding: spacing.lg,
+    padding: spacing.lg, gap: spacing.md,
   },
-  planCardOpen: { backgroundColor: colors.black, borderColor: colors.black },
-  planTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
-  planGoal:  { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  planMeta:  { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
-  textWhite: { color: colors.white },
+  workoutCardOpen: { backgroundColor: colors.black, borderColor: colors.black, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
+  titleRow:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm },
+  workoutTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
+  workoutMeta:  { fontSize: fontSize.xs, color: colors.gray400 },
+  textWhite:    { color: colors.white },
+  focusPill: {
+    paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.full,
+  },
+  focusPillTxt: { fontSize: fontSize.xs, fontWeight: '600', textTransform: 'capitalize' },
 
-  planBody: {
+  exerciseBody: {
     backgroundColor: colors.white, borderWidth: 1, borderTopWidth: 0,
     borderColor: colors.gray200, borderBottomLeftRadius: borderRadius.md,
     borderBottomRightRadius: borderRadius.md, overflow: 'hidden',
+    paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg,
   },
-
-  week:      { paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
-  weekLabel: {
-    fontSize: fontSize.xs, fontWeight: '700', color: colors.gray400,
-    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: spacing.sm,
+  exRow: {
+    flexDirection: 'row', gap: spacing.md,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
-  dayCard:   { marginBottom: spacing.sm, padding: spacing.md },
-  dayHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.md },
-  dayLabel:  { fontSize: fontSize.sm, fontWeight: '700', color: colors.black },
-
-  noExercises: { fontSize: fontSize.sm, color: colors.gray400, fontStyle: 'italic' },
-
-  exerciseRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
-  exerciseNum: {
-    width: 26, height: 26, borderRadius: 13, backgroundColor: colors.gray100,
-    alignItems: 'center', justifyContent: 'center', marginTop: 2, flexShrink: 0,
+  exNumBadge: {
+    width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray100,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2,
   },
-  exerciseNumTxt: { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray600 },
-  exerciseName:   { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
-  exerciseMeta:   { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  tagRow:         { flexDirection: 'row', marginTop: spacing.xs },
-  tag: {
-    backgroundColor: colors.gray100, paddingHorizontal: spacing.sm,
-    paddingVertical: 2, borderRadius: borderRadius.full,
-  },
-  tagTxt:          { fontSize: fontSize.xs, color: colors.gray600 },
-  exerciseNotes:   { fontSize: fontSize.xs, color: colors.gray500, marginTop: spacing.xs, fontStyle: 'italic' },
-  exerciseCues:    { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, lineHeight: 16 },
-
-  errorTxt: { fontSize: fontSize.sm, color: colors.red500, padding: spacing.lg },
+  exNumTxt:  { fontSize: fontSize.xs, fontWeight: '700', color: colors.gray600 },
+  exName:    { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
+  exMuscle:  { fontSize: fontSize.xs, color: colors.gray400, textTransform: 'capitalize', marginTop: 1 },
+  exDetail:  { fontSize: fontSize.sm, color: colors.gray500, marginTop: spacing.xs },
+  exNotes:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs, lineHeight: 16 },
+  noExTxt:   { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center', padding: spacing.lg },
+  errorTxt:  { fontSize: fontSize.sm, color: colors.red500, padding: spacing.lg },
 });
