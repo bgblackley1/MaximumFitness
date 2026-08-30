@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.client import ClientProfile
 from app.models.booking import AvailabilitySlot, Booking
+from app.models.payment import SessionPack           # ← NEW IMPORT
 from app.middleware.auth import get_current_user, get_current_pt
 from app.schemas.booking import (
     AvailabilitySlotCreate,
@@ -21,7 +22,66 @@ from app.schemas.booking import (
 router = APIRouter()
 
 
-# ── Availability ──
+# ── Session pack helpers ──────────────────────────────────────────────────────
+
+async def _deduct_session(db: AsyncSession, client_id: uuid.UUID) -> SessionPack | None:
+    """
+    Find the client's active session pack and deduct 1 session.
+    Returns the updated pack, or None if no pack exists.
+    Marks pack as 'exhausted' when sessions_remaining reaches 0.
+    """
+    result = await db.execute(
+        select(SessionPack)
+        .where(
+            SessionPack.client_id == client_id,
+            SessionPack.status == "active",
+            SessionPack.sessions_remaining > 0,
+        )
+        .order_by(SessionPack.created_at.desc())
+    )
+    pack = result.scalar_one_or_none()
+
+    if pack:
+        pack.sessions_remaining -= 1
+        if pack.sessions_remaining <= 0:
+            pack.status = "exhausted"
+        await db.flush()
+
+    return pack
+
+
+async def _restore_session(db: AsyncSession, client_id: uuid.UUID) -> SessionPack | None:
+    """
+    When a booking is cancelled, restore 1 session to the client's most
+    recent non-cancelled pack.  If the pack was exhausted it becomes active
+    again.  If no pack exists we do nothing (non-fatal).
+    """
+    result = await db.execute(
+        select(SessionPack)
+        .where(
+            SessionPack.client_id == client_id,
+            SessionPack.status.in_(["active", "exhausted"]),
+        )
+        .order_by(SessionPack.created_at.desc())
+    )
+    pack = result.scalar_one_or_none()
+
+    if pack:
+        pack.sessions_remaining += 1
+        # Cap at the original total (prevents over-restore if someone
+        # cancels a booking that was made before the pack system existed)
+        if pack.sessions_remaining > pack.total_sessions:
+            pack.sessions_remaining = pack.total_sessions
+        # Re-activate if it was exhausted
+        if pack.status == "exhausted":
+            pack.status = "active"
+        await db.flush()
+
+    return pack
+
+
+# ── Availability ──────────────────────────────────────────────────────────────
+
 @router.get("/availability", response_model=list[AvailabilitySlotResponse])
 async def list_availability(
     user: User = Depends(get_current_user),
@@ -42,14 +102,14 @@ async def list_availability(
         select(AvailabilitySlot)
         .where(AvailabilitySlot.pt_id == pt_id)
         .order_by(
-            AvailabilitySlot.is_recurring.desc(),   # recurring first
-            AvailabilitySlot.day_of_week.asc().nullslast(),  # Mon→Sun
+            AvailabilitySlot.is_recurring.desc(),
+            AvailabilitySlot.day_of_week.asc().nullslast(),
             AvailabilitySlot.specific_date.asc().nullslast(),
-            AvailabilitySlot.start_time.asc(),      # earliest time first
+            AvailabilitySlot.start_time.asc(),
         )
     )
     return list(result.scalars().all())
-# app/routers/bookings.py — replace both functions
+
 
 @router.post(
     "/availability",
@@ -67,7 +127,7 @@ async def create_availability(
         start_time=body.start_time,
         end_time=body.end_time,
         is_recurring=body.is_recurring,
-        is_blocked=body.is_blocked,          # ← WAS MISSING
+        is_blocked=body.is_blocked,
         specific_date=body.specific_date,
     )
     db.add(slot)
@@ -95,7 +155,7 @@ async def update_availability(
     slot.start_time    = body.start_time
     slot.end_time      = body.end_time
     slot.is_recurring  = body.is_recurring
-    slot.is_blocked    = body.is_blocked     # ← WAS MISSING
+    slot.is_blocked    = body.is_blocked
     slot.specific_date = body.specific_date
     await db.flush()
     return slot
@@ -119,7 +179,7 @@ async def delete_availability(
     return {"message": "Slot deleted"}
 
 
-# ── Available slots query ──
+# ── Available slots query ─────────────────────────────────────────────────────
 
 @router.get("/bookings/available-slots", response_model=list[AvailableSlotResponse])
 async def get_available_slots(
@@ -127,7 +187,6 @@ async def get_available_slots(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # ── Find the PT ───────────────────────────────────────────────────────────
     if user.role == "pt":
         pt_id = user.id
     else:
@@ -139,13 +198,12 @@ async def get_available_slots(
             raise HTTPException(status_code=404, detail="Client profile not found")
         pt_id = client.pt_id
 
-    day_of_week = target_date.weekday()  # 0=Monday
+    day_of_week = target_date.weekday()
 
-    # ── Step 1: Get AVAILABLE (non-blocked) slots for this day ────────────────
     result = await db.execute(
         select(AvailabilitySlot).where(
             AvailabilitySlot.pt_id == pt_id,
-            AvailabilitySlot.is_blocked == False,  # ← EXCLUDE BLOCKED
+            AvailabilitySlot.is_blocked == False,
             (
                 (AvailabilitySlot.is_recurring == True)
                 & (AvailabilitySlot.day_of_week == day_of_week)
@@ -158,8 +216,6 @@ async def get_available_slots(
     )
     available_slots = list(result.scalars().all())
 
-    # ── Step 2: Get BLOCKED one-off overrides for this specific date ──────────
-    # e.g. PT blocked a recurring day for today specifically
     result = await db.execute(
         select(AvailabilitySlot).where(
             AvailabilitySlot.pt_id == pt_id,
@@ -169,7 +225,6 @@ async def get_available_slots(
     )
     blocked_overrides = list(result.scalars().all())
 
-    # ── Step 3: Get existing bookings for this date ───────────────────────────
     result = await db.execute(
         select(Booking).where(
             Booking.pt_id == pt_id,
@@ -179,7 +234,6 @@ async def get_available_slots(
     )
     existing_bookings = list(result.scalars().all())
 
-    # ── Step 4: Build 1-hour increments, filtering blocked & booked ───────────
     available: list[AvailableSlotResponse] = []
     seen_start_times: set[time] = set()
 
@@ -187,7 +241,6 @@ async def get_available_slots(
         current = slot.start_time
 
         while current < slot.end_time:
-            # Build next hour boundary
             next_h = current.hour + 1
             if next_h > 23:
                 break
@@ -195,19 +248,14 @@ async def get_available_slots(
             if next_hour > slot.end_time:
                 break
 
-            # Skip if we already have this start time (deduplicates
-            # overlapping recurring + one-off slots for same hour)
             if current in seen_start_times:
                 current = next_hour
                 continue
 
-            # Check if a blocked override covers this hour
             is_blocked_by_override = any(
                 b.start_time <= current < b.end_time
                 for b in blocked_overrides
             )
-
-            # Check if already booked
             is_already_booked = any(
                 b.start_time <= current < b.end_time
                 for b in existing_bookings
@@ -225,11 +273,11 @@ async def get_available_slots(
 
             current = next_hour
 
-    # ── Step 5: Sort chronologically ─────────────────────────────────────────
     available.sort(key=lambda s: s.start_time)
-
     return available
-# ── Bookings CRUD ──
+
+
+# ── Bookings CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/bookings", response_model=list[BookingResponse])
 async def list_bookings(
@@ -271,7 +319,7 @@ async def create_booking(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Get client profile
+    # ── Resolve client and PT ─────────────────────────────────────────────────
     if user.role == "client":
         result = await db.execute(
             select(ClientProfile).where(ClientProfile.user_id == user.id)
@@ -280,12 +328,12 @@ async def create_booking(
         if not client:
             raise HTTPException(status_code=404, detail="Client profile not found")
         client_id = client.id
-        pt_id = client.pt_id
+        pt_id     = client.pt_id
     else:
         client_id = body.client_id
-        pt_id = user.id
+        pt_id     = user.id
 
-    # Check for conflicts
+    # ── Check for slot conflict ───────────────────────────────────────────────
     result = await db.execute(
         select(Booking).where(
             Booking.pt_id == pt_id,
@@ -297,6 +345,41 @@ async def create_booking(
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Slot already booked")
 
+    # ── Check session pack (clients only) ─────────────────────────────────────
+    # PTs booking on behalf of a client still deduct from the pack.
+    if client_id:
+        pack_check = await db.execute(
+            select(SessionPack)
+            .where(
+                SessionPack.client_id == client_id,
+                SessionPack.status == "active",
+                SessionPack.sessions_remaining > 0,
+            )
+            .order_by(SessionPack.created_at.desc())
+        )
+        active_pack = pack_check.scalar_one_or_none()
+
+        # ── Block the booking if client has no sessions remaining ─────────────
+        # Only enforce this for client-initiated bookings.
+        # PTs can still book even if the pack is exhausted (they may be adding
+        # a complimentary session or the pack hasn't been set up yet).
+        if user.role == "client" and active_pack is None:
+            # Check if there is ANY pack at all (even exhausted) to give a
+            # better error message
+            any_pack = (await db.execute(
+                select(SessionPack)
+                .where(SessionPack.client_id == client_id)
+                .order_by(SessionPack.created_at.desc())
+            )).scalar_one_or_none()
+
+            if any_pack is not None:
+                raise HTTPException(
+                    status_code=402,
+                    detail="No sessions remaining in your current plan. Please contact your trainer to purchase more.",
+                )
+            # If no pack exists at all, allow booking (trainer hasn't set one up yet)
+
+    # ── Create the booking ────────────────────────────────────────────────────
     booking = Booking(
         client_id=client_id,
         pt_id=pt_id,
@@ -309,6 +392,13 @@ async def create_booking(
     )
     db.add(booking)
     await db.flush()
+
+    # ── ✅ Deduct 1 session from the active pack ───────────────────────────────
+    # We do this AFTER creating the booking so that if the deduction fails
+    # the booking itself is still rolled back by the DB transaction.
+    if client_id:
+        await _deduct_session(db, client_id)
+
     return booking
 
 
@@ -348,8 +438,6 @@ async def today_bookings(
     return list(result.scalars().all())
 
 
-# Add to app/routers/bookings.py — after the update_booking function:
-
 @router.delete("/bookings/{booking_id}", status_code=status.HTTP_200_OK)
 async def cancel_booking(
     booking_id: uuid.UUID,
@@ -363,7 +451,7 @@ async def cancel_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    # Verify ownership
+    # ── Verify ownership ──────────────────────────────────────────────────────
     if user.role == "pt" and booking.pt_id != user.id:
         raise HTTPException(status_code=403, detail="Not your booking")
     if user.role == "client":
@@ -374,6 +462,14 @@ async def cancel_booking(
         if not cp or booking.client_id != cp.id:
             raise HTTPException(status_code=403, detail="Not your booking")
 
+    # ── Only restore the session if the booking was active (not already cancelled) ──
+    was_active = booking.status in ("booked", "confirmed", "tentative")
+
     booking.status = "cancelled"
     await db.flush()
+
+    # ── ✅ Restore 1 session to the pack when a booking is cancelled ───────────
+    if was_active and booking.client_id:
+        await _restore_session(db, booking.client_id)
+
     return {"message": "Booking cancelled"}

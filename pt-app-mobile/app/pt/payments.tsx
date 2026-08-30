@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, ActivityIndicator, Alert, Modal,
-  TextInput,
+  RefreshControl, ActivityIndicator, Modal, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,23 +18,125 @@ const PRESET_PACKS = [
   { label: '20 Sessions', sessions: 20 },
 ];
 
-export default function PaymentsScreen() {
-  const [activeTab, setActiveTab]         = useState<Tab>('packs');
-  const [packs, setPacks]                 = useState<any[]>([]);
-  const [invoices, setInvoices]           = useState<any[]>([]);
-  const [clients, setClients]             = useState<any[]>([]);
-  const [loading, setLoading]             = useState(true);
-  const [refreshing, setRefreshing]       = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+// ── Generic inline confirmation modal ────────────────────────────────────────
+interface ConfirmModalProps {
+  visible:      boolean;
+  icon:         React.ComponentProps<typeof Ionicons>['name'];
+  iconColor:    string;
+  title:        string;
+  message:      string;
+  confirmLabel: string;
+  confirmColor: string;
+  loading:      boolean;
+  onCancel:     () => void;
+  onConfirm:    () => void;
+}
 
-  // New pack modal
+function ConfirmModal({
+  visible, icon, iconColor, title, message,
+  confirmLabel, confirmColor, loading, onCancel, onConfirm,
+}: ConfirmModalProps) {
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={cm.overlay}>
+        <View style={cm.box}>
+          <Ionicons name={icon} size={32} color={iconColor} style={{ marginBottom: spacing.md }} />
+          <Text style={cm.title}>{title}</Text>
+          <Text style={cm.msg}>{message}</Text>
+          <View style={cm.btns}>
+            <TouchableOpacity style={cm.cancel} onPress={onCancel} disabled={loading}>
+              <Text style={cm.cancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[cm.confirm, { backgroundColor: confirmColor }, loading && { opacity: 0.6 }]}
+              onPress={onConfirm}
+              disabled={loading}
+            >
+              {loading
+                ? <ActivityIndicator color={colors.white} size="small" />
+                : <Text style={cm.confirmTxt}>{confirmLabel}</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const cm = StyleSheet.create({
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center', justifyContent: 'center', padding: spacing.xl,
+  },
+  box: {
+    backgroundColor: colors.white, borderRadius: borderRadius.xl,
+    padding: spacing.xxl, width: '100%', maxWidth: 380, alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, shadowRadius: 12, elevation: 8,
+  },
+  title:      { fontSize: fontSize.lg, fontWeight: '700', color: colors.black, marginBottom: spacing.sm, textAlign: 'center' },
+  msg:        { fontSize: fontSize.sm, color: colors.gray600, textAlign: 'center', lineHeight: 20, marginBottom: spacing.xl },
+  btns:       { flexDirection: 'row', gap: spacing.md, width: '100%' },
+  cancel:     { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center' },
+  cancelTxt:  { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
+  confirm:    { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, alignItems: 'center' },
+  confirmTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
+});
+
+// ── Error modal (also replaces Alert.alert for errors) ────────────────────────
+function ErrorModal({
+  visible, message, onClose,
+}: { visible: boolean; message: string; onClose: () => void }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={cm.overlay}>
+        <View style={cm.box}>
+          <Ionicons name="alert-circle-outline" size={36} color={colors.red500} style={{ marginBottom: spacing.md }} />
+          <Text style={cm.title}>Error</Text>
+          <Text style={cm.msg}>{message}</Text>
+          <TouchableOpacity
+            style={[cm.confirm, { backgroundColor: colors.black, width: '100%' }]}
+            onPress={onClose}
+          >
+            <Text style={cm.confirmTxt}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+
+export default function PaymentsScreen() {
+  const [activeTab, setActiveTab]   = useState<Tab>('packs');
+  const [packs, setPacks]           = useState<any[]>([]);
+  const [invoices, setInvoices]     = useState<any[]>([]);
+  const [clients, setClients]       = useState<any[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // Error display (replaces Alert.alert)
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // ── "Use Session" confirmation ──
+  const [useTarget, setUseTarget]   = useState<any | null>(null);
+
+  // ── "Add Session" confirmation ──
+  const [addTarget, setAddTarget]   = useState<any | null>(null);
+
+  // ── "Cancel Pack" confirmation ──
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+
+  // ── New pack modal ──
   const [newPackModal, setNewPackModal] = useState(false);
   const [packForm, setPackForm] = useState({
-    client_id:    '',
-    pack_name:    '',
+    client_id:      '',
+    pack_name:      '',
     total_sessions: 10,
-    price_pence:  '',
-    notes:        '',
+    price_pence:    '',
+    notes:          '',
   });
   const [savingPack, setSavingPack] = useState(false);
 
@@ -64,123 +165,103 @@ export default function PaymentsScreen() {
     setRefreshing(false);
   };
 
-  const handleUseSession = (pack: any) => {
-    if (pack.sessions_remaining <= 0) {
-      Alert.alert('No sessions remaining', 'This pack is exhausted.');
-      return;
+  // ── Execute: use 1 session ───────────────────────────────────────────────
+  const confirmUseSession = async () => {
+    if (!useTarget) return;
+    setActionLoading(true);
+    try {
+      const res = await API.put(`/payments/session-packs/${useTarget.id}/adjust`, {
+        adjustment: -1,
+        reason: 'Session used',
+      });
+      setPacks((prev) => prev.map((p) => p.id === useTarget.id ? res.data : p));
+      setUseTarget(null);
+    } catch (err: any) {
+      setUseTarget(null);
+      setErrorMsg(err.response?.data?.detail ?? 'Failed to deduct session.');
+    } finally {
+      setActionLoading(false);
     }
-    Alert.alert(
-      'Use 1 Session',
-      `Mark 1 session as used for ${clientName(pack.client_id)}?\n${pack.sessions_remaining - 1} will remain.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            setActionLoading(pack.id);
-            try {
-              const res = await API.put(`/payments/session-packs/${pack.id}/adjust`, {
-                adjustment: -1,
-                reason: 'Session used',
-              });
-              setPacks((prev) => prev.map((p) => p.id === pack.id ? res.data : p));
-            } catch (err: any) {
-              Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
-            } finally {
-              setActionLoading(null);
-            }
-          },
-        },
-      ]
-    );
   };
 
-  const handleAddSession = (pack: any) => {
-    Alert.alert(
-      'Add 1 Session',
-      `Add 1 bonus session to ${clientName(pack.client_id)}'s pack?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Add',
-          onPress: async () => {
-            setActionLoading(pack.id);
-            try {
-              const res = await API.put(`/payments/session-packs/${pack.id}/adjust`, {
-                adjustment: 1,
-                reason: 'Bonus session added',
-              });
-              setPacks((prev) => prev.map((p) => p.id === pack.id ? res.data : p));
-            } catch (err: any) {
-              Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
-            } finally {
-              setActionLoading(null);
-            }
-          },
-        },
-      ]
-    );
+  // ── Execute: add 1 session ───────────────────────────────────────────────
+  const confirmAddSession = async () => {
+    if (!addTarget) return;
+    setActionLoading(true);
+    try {
+      const res = await API.put(`/payments/session-packs/${addTarget.id}/adjust`, {
+        adjustment: 1,
+        reason: 'Bonus session added',
+      });
+      setPacks((prev) => prev.map((p) => p.id === addTarget.id ? res.data : p));
+      setAddTarget(null);
+    } catch (err: any) {
+      setAddTarget(null);
+      setErrorMsg(err.response?.data?.detail ?? 'Failed to add session.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleCancelPack = (packId: string) => {
-    Alert.alert('Cancel Pack', 'Are you sure?', [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Cancel Pack',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await API.delete(`/payments/session-packs/${packId}`);
-            setPacks((prev) => prev.map((p) => p.id === packId ? { ...p, status: 'cancelled' } : p));
-          } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail ?? 'Failed');
-          }
-        },
-      },
-    ]);
+  // ── Execute: cancel pack ─────────────────────────────────────────────────
+  const confirmCancelPack = async () => {
+    if (!cancelTarget) return;
+    setActionLoading(true);
+    try {
+      await API.delete(`/payments/session-packs/${cancelTarget.id}`);
+      setPacks((prev) =>
+        prev.map((p) => p.id === cancelTarget.id ? { ...p, status: 'cancelled' } : p)
+      );
+      setCancelTarget(null);
+    } catch (err: any) {
+      setCancelTarget(null);
+      setErrorMsg(err.response?.data?.detail ?? 'Failed to cancel pack.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
+  // ── Create new pack ──────────────────────────────────────────────────────
   const handleCreatePack = async () => {
     if (!packForm.client_id || !packForm.pack_name || !packForm.price_pence) {
-      Alert.alert('Missing fields', 'Client, pack name, and price are required.');
+      setErrorMsg('Client, pack name, and price are required.');
       return;
     }
     setSavingPack(true);
     try {
       const res = await API.post('/payments/session-packs', {
-        client_id:       packForm.client_id,
-        pack_name:       packForm.pack_name,
-        total_sessions:  packForm.total_sessions,
+        client_id:        packForm.client_id,
+        pack_name:        packForm.pack_name,
+        total_sessions:   packForm.total_sessions,
         price_paid_pence: parseInt(packForm.price_pence) * 100, // £ → pence
-        notes:           packForm.notes || null,
+        notes:            packForm.notes || null,
       });
       setPacks((prev) => [res.data, ...prev]);
       setNewPackModal(false);
       setPackForm({ client_id: '', pack_name: '', total_sessions: 10, price_pence: '', notes: '' });
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Failed to create pack');
+      setErrorMsg(err.response?.data?.detail ?? 'Failed to create session pack.');
     } finally {
       setSavingPack(false);
     }
   };
 
-  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? 'Unknown';
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const clientName = (id: string) =>
+    clients.find((c) => c.id === id)?.name ?? 'Unknown Client';
 
-  const fmtMoney = (pence: number) =>
-    `£${(pence / 100).toFixed(2)}`;
+  const fmtMoney = (pence: number) => `£${(pence / 100).toFixed(2)}`;
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   const statusVariant = (s: string) =>
-    s === 'active'    ? 'active'
-    : s === 'exhausted'? 'inactive'
-    : 'danger';
+    s === 'active' ? 'active' : s === 'exhausted' ? 'inactive' : 'danger';
 
   // Stats
-  const activePacks   = packs.filter((p) => p.status === 'active');
-  const totalSessions = activePacks.reduce((s, p) => s + p.sessions_remaining, 0);
-  const totalRevenue  = invoices.reduce((s, i) => s + i.amount_pence, 0);
+  const activePacks    = packs.filter((p) => p.status === 'active');
+  const totalSessions  = activePacks.reduce((s, p) => s + p.sessions_remaining, 0);
+  const totalRevenue   = invoices.reduce((s, i) => s + i.amount_pence, 0);
 
   if (loading) {
     return (
@@ -250,33 +331,33 @@ export default function PaymentsScreen() {
             </View>
           ) : (
             packs.map((pack) => {
-              const busy = actionLoading === pack.id;
-              const pct  = pack.total_sessions > 0
+              const pct = pack.total_sessions > 0
                 ? (pack.sessions_remaining / pack.total_sessions) * 100
                 : 0;
+
+              const barColor =
+                pct <= 20  ? colors.red500
+                : pct <= 50 ? '#F59E0B'
+                : colors.black;
+
               return (
                 <Card key={pack.id} style={styles.packCard}>
-                  {/* Header row */}
+                  {/* Header */}
                   <View style={styles.packHeader}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.packClient}>{clientName(pack.client_id)}</Text>
                       <Text style={styles.packName}>{pack.pack_name}</Text>
                     </View>
-                    <Badge
-                      label={pack.status}
-                      variant={statusVariant(pack.status)}
-                    />
+                    <Badge label={pack.status} variant={statusVariant(pack.status)} />
                   </View>
 
-                  {/* Sessions counter */}
+                  {/* Session counter */}
                   <View style={styles.sessionCounter}>
                     <View style={styles.sessionNumbers}>
                       <Text style={styles.sessionRemaining}>{pack.sessions_remaining}</Text>
                       <Text style={styles.sessionTotal}> / {pack.total_sessions} sessions</Text>
                     </View>
-                    <Text style={styles.sessionPaid}>
-                      {fmtMoney(pack.price_paid_pence)} paid
-                    </Text>
+                    <Text style={styles.sessionPaid}>{fmtMoney(pack.price_paid_pence)} paid</Text>
                   </View>
 
                   {/* Progress bar */}
@@ -284,47 +365,62 @@ export default function PaymentsScreen() {
                     <View
                       style={[
                         styles.progressFill,
-                        { width: `${pct}%` as any },
-                        pct <= 20 && { backgroundColor: colors.red500 },
-                        pct > 20 && pct <= 50 && { backgroundColor: '#F59E0B' },
+                        { width: `${pct}%` as any, backgroundColor: barColor },
                       ]}
                     />
                   </View>
 
-                  {pack.notes ? (
-                    <Text style={styles.packNotes}>{pack.notes}</Text>
-                  ) : null}
+                  {pack.notes ? <Text style={styles.packNotes}>{pack.notes}</Text> : null}
 
-                  {/* Actions */}
+                  {/* Pack exhausted / expired warning */}
+                  {pack.status === 'exhausted' && (
+                    <View style={styles.exhaustedBanner}>
+                      <Ionicons name="alert-circle-outline" size={14} color={colors.red700} />
+                      <Text style={styles.exhaustedTxt}>
+                        All sessions used — add more or create a new pack.
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Action buttons — all use inline modals, no Alert.alert */}
                   {pack.status !== 'cancelled' && (
-                    busy ? (
-                      <ActivityIndicator color={colors.black} style={{ marginTop: spacing.md }} />
-                    ) : (
-                      <View style={styles.actionRow}>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, pack.sessions_remaining === 0 && styles.actionBtnDisabled]}
-                          onPress={() => handleUseSession(pack)}
-                          disabled={pack.sessions_remaining === 0}
-                        >
-                          <Ionicons name="remove-circle-outline" size={16} color={colors.gray600} />
-                          <Text style={styles.actionBtnTxt}>Use Session</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, { backgroundColor: colors.green50 }]}
-                          onPress={() => handleAddSession(pack)}
-                        >
-                          <Ionicons name="add-circle-outline" size={16} color={colors.green700} />
-                          <Text style={[styles.actionBtnTxt, { color: colors.green700 }]}>Add Session</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, styles.actionBtnDanger]}
-                          onPress={() => handleCancelPack(pack.id)}
-                        >
-                          <Ionicons name="close-circle-outline" size={16} color={colors.red700} />
-                          <Text style={[styles.actionBtnTxt, { color: colors.red700 }]}>Cancel</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )
+                    <View style={styles.actionRow}>
+                      {/* USE SESSION */}
+                      <TouchableOpacity
+                        style={[
+                          styles.actionBtn,
+                          pack.sessions_remaining === 0 && styles.actionBtnDisabled,
+                        ]}
+                        onPress={() => pack.sessions_remaining > 0 && setUseTarget(pack)}
+                        disabled={pack.sessions_remaining === 0}
+                        activeOpacity={pack.sessions_remaining === 0 ? 1 : 0.7}
+                      >
+                        <Ionicons name="remove-circle-outline" size={16} color={colors.gray600} />
+                        <Text style={styles.actionBtnTxt}>Use Session</Text>
+                      </TouchableOpacity>
+
+                      {/* ADD SESSION */}
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: colors.green50 }]}
+                        onPress={() => setAddTarget(pack)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="add-circle-outline" size={16} color={colors.green700} />
+                        <Text style={[styles.actionBtnTxt, { color: colors.green700 }]}>
+                          Add Session
+                        </Text>
+                      </TouchableOpacity>
+
+                      {/* CANCEL PACK */}
+                      <TouchableOpacity
+                        style={[styles.actionBtn, styles.actionBtnDanger]}
+                        onPress={() => setCancelTarget(pack)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="close-circle-outline" size={16} color={colors.red700} />
+                        <Text style={[styles.actionBtnTxt, { color: colors.red700 }]}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </Card>
               );
@@ -338,7 +434,9 @@ export default function PaymentsScreen() {
             <View style={styles.empty}>
               <Ionicons name="receipt-outline" size={48} color={colors.gray300} />
               <Text style={styles.emptyTitle}>No invoices yet</Text>
-              <Text style={styles.emptyText}>Invoices are created automatically when you add a session pack.</Text>
+              <Text style={styles.emptyText}>
+                Invoices are created automatically when you add a session pack.
+              </Text>
             </View>
           ) : (
             invoices.map((inv) => (
@@ -363,6 +461,71 @@ export default function PaymentsScreen() {
         )}
       </ScrollView>
 
+      {/* ════════════════════════════════════════════════════════════
+          INLINE CONFIRMATION MODALS (replaces all Alert.alert calls)
+      ════════════════════════════════════════════════════════════ */}
+
+      {/* Use Session */}
+      <ConfirmModal
+        visible={!!useTarget}
+        icon="remove-circle-outline"
+        iconColor={colors.gray600}
+        title="Use 1 Session?"
+        message={
+          useTarget
+            ? `Mark 1 session as used for ${clientName(useTarget.client_id)}.\n${useTarget.sessions_remaining - 1} session${useTarget.sessions_remaining - 1 !== 1 ? 's' : ''} will remain.`
+            : ''
+        }
+        confirmLabel="Confirm"
+        confirmColor={colors.black}
+        loading={actionLoading}
+        onCancel={() => setUseTarget(null)}
+        onConfirm={confirmUseSession}
+      />
+
+      {/* Add Session */}
+      <ConfirmModal
+        visible={!!addTarget}
+        icon="add-circle-outline"
+        iconColor={colors.green700}
+        title="Add 1 Session?"
+        message={
+          addTarget
+            ? `Add 1 bonus session to ${clientName(addTarget.client_id)}'s "${addTarget.pack_name}" pack.\nThey will have ${addTarget.sessions_remaining + 1} session${addTarget.sessions_remaining + 1 !== 1 ? 's' : ''} remaining.`
+            : ''
+        }
+        confirmLabel="Add Session"
+        confirmColor={colors.green700}
+        loading={actionLoading}
+        onCancel={() => setAddTarget(null)}
+        onConfirm={confirmAddSession}
+      />
+
+      {/* Cancel Pack */}
+      <ConfirmModal
+        visible={!!cancelTarget}
+        icon="close-circle-outline"
+        iconColor={colors.red500}
+        title="Cancel Pack?"
+        message={
+          cancelTarget
+            ? `Cancel "${cancelTarget.pack_name}" for ${clientName(cancelTarget.client_id)}? This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Cancel Pack"
+        confirmColor={colors.red500}
+        loading={actionLoading}
+        onCancel={() => setCancelTarget(null)}
+        onConfirm={confirmCancelPack}
+      />
+
+      {/* Error display */}
+      <ErrorModal
+        visible={!!errorMsg}
+        message={errorMsg}
+        onClose={() => setErrorMsg('')}
+      />
+
       {/* ── New Session Pack Modal ── */}
       <Modal visible={newPackModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -373,25 +536,38 @@ export default function PaymentsScreen() {
                 <Ionicons name="close" size={24} color={colors.gray600} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: spacing.xxxl }}
+              keyboardShouldPersistTaps="handled"
+            >
               {/* Select Client */}
               <Text style={styles.fieldLabel}>Select Client *</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.chipScroll}
+              >
                 {clients.filter((c: any) => c.status === 'active').map((c: any) => (
                   <TouchableOpacity
                     key={c.id}
-                    style={[styles.chip, packForm.client_id === c.id && styles.chipActive]}
+                    style={[
+                      styles.chip,
+                      packForm.client_id === c.id && styles.chipActive,
+                    ]}
                     onPress={() => setPackForm((f) => ({ ...f, client_id: c.id }))}
                   >
-                    <Text style={[styles.chipTxt, packForm.client_id === c.id && styles.chipTxtActive]}>
+                    <Text style={[
+                      styles.chipTxt,
+                      packForm.client_id === c.id && styles.chipTxtActive,
+                    ]}>
                       {c.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
 
-              {/* Number of sessions */}
+              {/* Session presets */}
               <Text style={styles.fieldLabel}>Number of Sessions *</Text>
               <View style={styles.presetsRow}>
                 {PRESET_PACKS.map((p) => (
@@ -401,11 +577,13 @@ export default function PaymentsScreen() {
                       styles.presetChip,
                       packForm.total_sessions === p.sessions && styles.chipActive,
                     ]}
-                    onPress={() => setPackForm((f) => ({
-                      ...f,
-                      total_sessions: p.sessions,
-                      pack_name: p.label,
-                    }))}
+                    onPress={() =>
+                      setPackForm((f) => ({
+                        ...f,
+                        total_sessions: p.sessions,
+                        pack_name: p.label,
+                      }))
+                    }
                   >
                     <Text style={[
                       styles.presetChipTxt,
@@ -478,7 +656,10 @@ const styles = StyleSheet.create({
     width: 42, height: 42, borderRadius: 21,
     backgroundColor: colors.black, alignItems: 'center', justifyContent: 'center',
   },
-  statsRow: { flexDirection: 'row', paddingHorizontal: spacing.xl, gap: spacing.md, marginBottom: spacing.md },
+  statsRow: {
+    flexDirection: 'row', paddingHorizontal: spacing.xl,
+    gap: spacing.md, marginBottom: spacing.md,
+  },
   statCard: {
     flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.md,
     padding: spacing.lg, alignItems: 'center', borderWidth: 1, borderColor: colors.gray200,
@@ -493,41 +674,53 @@ const styles = StyleSheet.create({
   tab:        { flex: 1, paddingVertical: spacing.sm + 2, borderRadius: borderRadius.sm - 2, alignItems: 'center' },
   tabActive:  { backgroundColor: colors.black },
   tabTxt:     { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
-  tabTxtActive: { color: colors.white },
+  tabTxtActive:{ color: colors.white },
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   empty: { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
   emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center' },
 
-  packCard:        { marginBottom: spacing.sm },
-  packHeader:      { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
-  packClient:      { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
-  packName:        { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  sessionCounter:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: spacing.sm },
-  sessionNumbers:  { flexDirection: 'row', alignItems: 'baseline' },
-  sessionRemaining:{ fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
-  sessionTotal:    { fontSize: fontSize.sm, color: colors.gray400 },
-  sessionPaid:     { fontSize: fontSize.sm, color: colors.gray400 },
-  progressBar:     { height: 8, backgroundColor: colors.gray100, borderRadius: 4, overflow: 'hidden', marginBottom: spacing.sm },
-  progressFill:    { height: '100%', backgroundColor: colors.black, borderRadius: 4 },
-  packNotes:       { fontSize: fontSize.xs, color: colors.gray400, fontStyle: 'italic', marginBottom: spacing.sm },
-  actionRow:       { flexDirection: 'row', gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.gray100, paddingTop: spacing.md, flexWrap: 'wrap' },
+  // Pack card
+  packCard:         { marginBottom: spacing.sm },
+  packHeader:       { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
+  packClient:       { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
+  packName:         { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
+  sessionCounter:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: spacing.sm },
+  sessionNumbers:   { flexDirection: 'row', alignItems: 'baseline' },
+  sessionRemaining: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
+  sessionTotal:     { fontSize: fontSize.sm, color: colors.gray400 },
+  sessionPaid:      { fontSize: fontSize.sm, color: colors.gray400 },
+  progressBar:      { height: 8, backgroundColor: colors.gray100, borderRadius: 4, overflow: 'hidden', marginBottom: spacing.sm },
+  progressFill:     { height: '100%', borderRadius: 4 },
+  packNotes:        { fontSize: fontSize.xs, color: colors.gray400, fontStyle: 'italic', marginBottom: spacing.sm },
+  exhaustedBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    backgroundColor: colors.red50, padding: spacing.sm,
+    borderRadius: borderRadius.sm, marginBottom: spacing.sm,
+  },
+  exhaustedTxt: { flex: 1, fontSize: fontSize.xs, color: colors.red700, lineHeight: 16 },
+  actionRow: {
+    flexDirection: 'row', gap: spacing.sm, borderTopWidth: 1,
+    borderTopColor: colors.gray100, paddingTop: spacing.md, flexWrap: 'wrap',
+  },
   actionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     backgroundColor: colors.gray100, paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm, borderRadius: borderRadius.full,
   },
-  actionBtnDisabled:{ opacity: 0.4 },
-  actionBtnDanger:  { backgroundColor: colors.red50 },
-  actionBtnTxt:     { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray600 },
+  actionBtnDisabled: { opacity: 0.35 },
+  actionBtnDanger:   { backgroundColor: colors.red50 },
+  actionBtnTxt:      { fontSize: fontSize.xs, fontWeight: '600', color: colors.gray600 },
 
-  invoiceCard: { marginBottom: spacing.sm },
-  invoiceRow:  { flexDirection: 'row', alignItems: 'center' },
-  invoiceClient:{ fontSize: fontSize.md, fontWeight: '600', color: colors.black },
-  invoiceDesc: { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
-  invoiceDate: { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
-  invoiceAmt:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  // Invoice card
+  invoiceCard:   { marginBottom: spacing.sm },
+  invoiceRow:    { flexDirection: 'row', alignItems: 'center' },
+  invoiceClient: { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
+  invoiceDesc:   { fontSize: fontSize.sm, color: colors.gray500, marginTop: 2 },
+  invoiceDate:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+  invoiceAmt:    { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
 
+  // New pack modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl,
@@ -539,15 +732,19 @@ const styles = StyleSheet.create({
   },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   modalBody:  { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
+  fieldLabel: {
+    fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700,
+    marginTop: spacing.lg, marginBottom: spacing.sm,
+  },
   input: {
     borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
     padding: spacing.md, fontSize: fontSize.md, color: colors.black,
   },
-  chipScroll:   { marginBottom: spacing.xs },
+  chipScroll:    { marginBottom: spacing.xs },
   chip: {
-    paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.full,
-    borderWidth: 1, borderColor: colors.gray200, marginRight: spacing.sm, marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: borderRadius.full, borderWidth: 1,
+    borderColor: colors.gray200, marginRight: spacing.sm, marginBottom: spacing.sm,
   },
   chipActive:   { backgroundColor: colors.black, borderColor: colors.black },
   chipTxt:      { fontSize: fontSize.sm, color: colors.gray600 },
@@ -557,7 +754,7 @@ const styles = StyleSheet.create({
     flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
     borderWidth: 1.5, borderColor: colors.gray200, alignItems: 'center',
   },
-  presetChipTxt:{ fontSize: fontSize.sm, fontWeight: '600', color: colors.gray600 },
+  presetChipTxt: { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray600 },
   saveBtn: {
     backgroundColor: colors.black, borderRadius: borderRadius.sm,
     paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl,

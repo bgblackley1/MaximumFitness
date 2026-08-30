@@ -3,7 +3,6 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.user import User
 from app.models.client import ClientProfile
@@ -20,7 +19,7 @@ from app.schemas.payment import (
 router = APIRouter()
 
 
-# ── Session Packs ────────────────────────────────────────────────────────────
+# ── Session Packs ─────────────────────────────────────────────────────────────
 
 @router.get("/session-packs", response_model=list[SessionPackResponse])
 async def list_session_packs(
@@ -96,6 +95,9 @@ async def create_session_pack(
     invoice.pack_id = pack.id
     await db.flush()
 
+    # ── FIX: refresh so server-generated columns (created_at, updated_at,
+    # purchased_at) are loaded before Pydantic serialises the response.
+    await db.refresh(pack)
     return pack
 
 
@@ -106,7 +108,7 @@ async def adjust_sessions(
     pt: User = Depends(get_current_pt),
     db: AsyncSession = Depends(get_db),
 ):
-    """Manually add or deduct sessions from a pack (e.g. mark session as used)."""
+    """Manually add or deduct sessions from a pack."""
     result = await db.execute(
         select(SessionPack).where(
             SessionPack.id == pack_id,
@@ -121,7 +123,10 @@ async def adjust_sessions(
     if new_remaining < 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot deduct {abs(body.adjustment)} — only {pack.sessions_remaining} remaining",
+            detail=(
+                f"Cannot deduct {abs(body.adjustment)} — "
+                f"only {pack.sessions_remaining} remaining"
+            ),
         )
 
     pack.sessions_remaining = new_remaining
@@ -132,6 +137,15 @@ async def adjust_sessions(
         pack.status = "active"
 
     await db.flush()
+
+    # ── FIX: The root cause of the 500 / ResponseValidationError.
+    # After flush(), SQLAlchemy marks server-side columns (updated_at via
+    # onupdate=func.now()) as expired. Async SQLAlchemy cannot lazy-load
+    # expired attributes — it raises MissingGreenlet, which itself fails
+    # to __str__(), producing the cryptic "<exception str() failed>" message.
+    # db.refresh() eagerly reloads ALL columns from the DB before Pydantic
+    # tries to access them.
+    await db.refresh(pack)
     return pack
 
 
@@ -150,12 +164,14 @@ async def cancel_session_pack(
     pack = result.scalar_one_or_none()
     if not pack:
         raise HTTPException(status_code=404, detail="Session pack not found")
+
     pack.status = "cancelled"
     await db.flush()
+    # No refresh needed here — we return a plain dict, not the ORM object
     return {"message": "Pack cancelled"}
 
 
-# ── Invoices ─────────────────────────────────────────────────────────────────
+# ── Invoices ──────────────────────────────────────────────────────────────────
 
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
