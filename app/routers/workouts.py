@@ -62,27 +62,65 @@ def _assigned_clients(plan: WorkoutPlan) -> list[dict]:
     ]
 
 
+async def _delete_plan_structure(db: AsyncSession, plan_id: uuid.UUID) -> None:
+    """
+    Delete all weeks/days/exercises for a plan using direct SQL DELETE queries.
+    This avoids the MissingGreenlet lazy-load error in async SQLAlchemy.
+    """
+    # 1. Collect all week IDs for this plan
+    week_rows = (await db.execute(
+        select(PlanWeek.id).where(PlanWeek.plan_id == plan_id)
+    )).fetchall()
+    week_ids = [row[0] for row in week_rows]
+
+    if week_ids:
+        # 2. Collect all day IDs for those weeks
+        day_rows = (await db.execute(
+            select(PlanDay.id).where(PlanDay.week_id.in_(week_ids))
+        )).fetchall()
+        day_ids = [row[0] for row in day_rows]
+
+        if day_ids:
+            # 3. Delete all exercises for those days
+            await db.execute(
+                sqla_delete(PlanExercise).where(PlanExercise.day_id.in_(day_ids))
+            )
+
+        # 4. Delete all days for those weeks
+        await db.execute(
+            sqla_delete(PlanDay).where(PlanDay.week_id.in_(week_ids))
+        )
+
+        # 5. Delete all weeks for this plan
+        await db.execute(
+            sqla_delete(PlanWeek).where(PlanWeek.plan_id == plan_id)
+        )
+
+    await db.flush()
+
+
 async def _create_flat_structure(
     db: AsyncSession,
     plan: WorkoutPlan,
     exercises: list,
-):
-    """Create a single week + single day with the provided exercise list."""
-    # Delete existing structure
-    for w in plan.weeks:
-        for d in w.days:
-            for e in d.exercises:
-                await db.delete(e)
-            await db.delete(d)
-        await db.delete(w)
-    await db.flush()
+) -> None:
+    """
+    Delete any existing structure for the plan then create a single
+    week + single day with the provided exercise list.
+
+    Uses direct SQL DELETE (not ORM relationship iteration) to avoid
+    the MissingGreenlet lazy-load error in async SQLAlchemy.
+    """
+    await _delete_plan_structure(db, plan.id)
 
     week = PlanWeek(plan_id=plan.id, week_number=1)
     db.add(week)
     await db.flush()
+
     day = PlanDay(week_id=week.id, day_label="Workout", day_order=1)
     db.add(day)
     await db.flush()
+
     for i, ex in enumerate(exercises):
         db.add(PlanExercise(
             day_id=day.id,
@@ -94,6 +132,7 @@ async def _create_flat_structure(
             notes=ex.notes,
             progression_rule=getattr(ex, "progression_rule", None),
         ))
+
     await db.flush()
 
 
@@ -142,7 +181,7 @@ async def list_workouts(
         result = await db.execute(q)
         return [_plan_to_dict(p) for p in result.scalars().all()]
 
-    # Client view
+    # ── Client view ───────────────────────────────────────────────────────────
     cp = (await db.execute(
         select(ClientProfile).where(ClientProfile.user_id == user.id)
     )).scalar_one_or_none()
@@ -160,6 +199,7 @@ async def list_workouts(
             )
         ).fetchall()
     ]
+
     q = (
         select(WorkoutPlan)
         .where(WorkoutPlan.id.in_(plan_ids), WorkoutPlan.status == "active")
@@ -170,7 +210,7 @@ async def list_workouts(
     return [_plan_to_dict(p) for p in result.scalars().all()]
 
 
-# ── Create workout (flat) ─────────────────────────────────────────────────────
+# ── Create workout ────────────────────────────────────────────────────────────
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_workout(
@@ -187,6 +227,8 @@ async def create_workout(
     )
     db.add(plan)
     await db.flush()
+    # plan.weeks is empty at this point — _create_flat_structure handles
+    # that correctly because it uses direct SQL queries, not plan.weeks
     await _create_flat_structure(db, plan, body.exercises)
     return {"message": "Workout created", "plan_id": str(plan.id)}
 
@@ -228,10 +270,13 @@ async def update_workout(
     pt: User = Depends(get_current_pt),
     db:  AsyncSession = Depends(get_db),
 ):
+    # Eager-load assignments so we can cascade visibility change
     result = await db.execute(
         select(WorkoutPlan)
         .where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
-        .options(*_eager_load())
+        .options(
+            selectinload(WorkoutPlan.assignments),
+        )
     )
     plan = result.scalar_one_or_none()
     if not plan:
@@ -246,6 +291,7 @@ async def update_workout(
         for asgn in plan.assignments:
             asgn.visibility = plan.visibility
 
+    # _create_flat_structure uses direct SQL deletes — safe on async
     await _create_flat_structure(db, plan, body.exercises)
     return {"message": "Workout updated"}
 
@@ -278,14 +324,17 @@ async def duplicate_workout(
     db:  AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(WorkoutPlan).where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
+        select(WorkoutPlan)
+        .where(WorkoutPlan.id == plan_id, WorkoutPlan.pt_id == pt.id)
         .options(*_eager_load())
     )
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(404, "Workout not found")
 
+    # _flat_exercises is safe because plan was eagerly loaded above
     exercises = _flat_exercises(plan)
+
     new_plan = WorkoutPlan(
         pt_id=pt.id,
         title=f"{plan.title} (Copy)",
@@ -296,19 +345,27 @@ async def duplicate_workout(
     db.add(new_plan)
     await db.flush()
 
+    # Build structure for the new plan directly — no existing weeks to delete
     week = PlanWeek(plan_id=new_plan.id, week_number=1)
     db.add(week)
     await db.flush()
+
     day = PlanDay(week_id=week.id, day_label="Workout", day_order=1)
     db.add(day)
     await db.flush()
+
     for ex in exercises:
         db.add(PlanExercise(
-            day_id=day.id, exercise_id=uuid.UUID(ex["exercise_id"]),
-            order=ex["order"], sets=ex["sets"], reps=ex["reps"],
-            rest_seconds=ex["rest_seconds"], notes=ex["notes"],
+            day_id=day.id,
+            exercise_id=uuid.UUID(ex["exercise_id"]),
+            order=ex["order"],
+            sets=ex["sets"],
+            reps=ex["reps"],
+            rest_seconds=ex["rest_seconds"],
+            notes=ex["notes"],
         ))
     await db.flush()
+
     return {"message": "Workout duplicated", "plan_id": str(new_plan.id)}
 
 
@@ -328,13 +385,17 @@ async def assign_workout(
     if not plan:
         raise HTTPException(404, "Workout not found")
 
-    valid_ids = []
+    # Verify each client belongs to this PT
+    valid_ids: list[uuid.UUID] = []
     for cid in body.client_ids:
         if (await db.execute(
-            select(ClientProfile).where(ClientProfile.id == cid, ClientProfile.pt_id == pt.id)
+            select(ClientProfile).where(
+                ClientProfile.id == cid, ClientProfile.pt_id == pt.id
+            )
         )).scalar_one_or_none():
             valid_ids.append(cid)
 
+    # Replace all assignments for this plan atomically
     await db.execute(
         sqla_delete(WorkoutPlanAssignment).where(WorkoutPlanAssignment.plan_id == plan_id)
     )
@@ -342,8 +403,10 @@ async def assign_workout(
 
     for cid in valid_ids:
         db.add(WorkoutPlanAssignment(
-            plan_id=plan_id, client_id=cid,
-            visibility=plan.visibility, status="active",
+            plan_id=plan_id,
+            client_id=cid,
+            visibility=plan.visibility,
+            status="active",
         ))
     await db.flush()
 
@@ -353,7 +416,7 @@ async def assign_workout(
     }
 
 
-# ── Set all workouts for one client (from client-detail) ─────────────────────
+# ── Set all workouts for one client (from client-detail screen) ───────────────
 
 @router.put("/assignments/by-client/{client_id}")
 async def set_workouts_for_client(
@@ -362,7 +425,7 @@ async def set_workouts_for_client(
     pt: User = Depends(get_current_pt),
     db:  AsyncSession = Depends(get_db),
 ):
-    # Verify client belongs to PT
+    # Verify client belongs to this PT
     cp = (await db.execute(
         select(ClientProfile).where(
             ClientProfile.id == client_id, ClientProfile.pt_id == pt.id
@@ -371,8 +434,8 @@ async def set_workouts_for_client(
     if not cp:
         raise HTTPException(404, "Client not found")
 
-    # Verify workout_ids belong to this PT and are active
-    valid_ids = []
+    # Verify each workout_id belongs to this PT and is active
+    valid_ids: list[uuid.UUID] = []
     for wid in body.workout_ids:
         if (await db.execute(
             select(WorkoutPlan).where(
@@ -383,14 +446,14 @@ async def set_workouts_for_client(
         )).scalar_one_or_none():
             valid_ids.append(wid)
 
-    # Get all plan IDs for this PT (to know which assignments to touch)
+    # Get all plan IDs for this PT so we only touch this PT's assignments
     pt_plan_ids = [
         row[0] for row in (
             await db.execute(select(WorkoutPlan.id).where(WorkoutPlan.pt_id == pt.id))
         ).fetchall()
     ]
 
-    # Replace assignments for this client (only for this PT's plans)
+    # Replace this client's assignments (only for plans belonging to this PT)
     await db.execute(
         sqla_delete(WorkoutPlanAssignment).where(
             WorkoutPlanAssignment.client_id == client_id,
@@ -400,12 +463,16 @@ async def set_workouts_for_client(
     await db.flush()
 
     for wid in valid_ids:
-        plan_res = await db.execute(select(WorkoutPlan).where(WorkoutPlan.id == wid))
+        plan_res = await db.execute(
+            select(WorkoutPlan).where(WorkoutPlan.id == wid)
+        )
         plan = plan_res.scalar_one_or_none()
         if plan:
             db.add(WorkoutPlanAssignment(
-                plan_id=wid, client_id=client_id,
-                visibility=plan.visibility, status="active",
+                plan_id=wid,
+                client_id=client_id,
+                visibility=plan.visibility,
+                status="active",
             ))
     await db.flush()
 

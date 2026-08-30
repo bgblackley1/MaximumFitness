@@ -23,7 +23,6 @@ export default function ProgressScreen() {
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
 
-  // ── Add Measurement modal state ──
   const [mModal,  setMModal]  = useState(false);
   const [mSaving, setMSaving] = useState(false);
   const [mForm, setMForm] = useState({
@@ -32,7 +31,6 @@ export default function ProgressScreen() {
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
 
-  // ── Photo upload state ──
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
@@ -63,7 +61,6 @@ export default function ProgressScreen() {
     setRefreshing(false);
   };
 
-  // ── Save measurement (client self-log) ───────────────────────────────────
   const saveMeasurement = async () => {
     if (!mForm.date || !clientProfileId) {
       Alert.alert('Error', 'Date is required');
@@ -94,16 +91,13 @@ export default function ProgressScreen() {
     }
   };
 
-  // ── Pick & upload photo (client self-upload) ─────────────────────────────
+  // ── FIX: Don't set Content-Type manually — let axios auto-set multipart boundary ──
   const pickAndUploadPhoto = async () => {
     if (!clientProfileId) return;
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(
-        'Permission Needed',
-        'Please allow access to your photo library to upload progress photos.',
-      );
+      Alert.alert('Permission Needed', 'Please allow access to your photo library.');
       return;
     }
 
@@ -125,10 +119,17 @@ export default function ProgressScreen() {
         name: 'progress_photo.jpg',
       } as any);
 
+      // ✅ KEY FIX: Set Content-Type to undefined so axios detects FormData
+      // and automatically adds the correct multipart/form-data boundary.
+      // Manually setting 'multipart/form-data' WITHOUT a boundary causes 422.
       const res = await API.post(
         `/clients/${clientProfileId}/photos`,
         formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
+        {
+          headers: {
+            'Content-Type': undefined,
+          },
+        },
       );
       setPhotos(prev => [res.data, ...prev]);
       Alert.alert('Uploaded!', 'Your progress photo has been saved.');
@@ -145,7 +146,6 @@ export default function ProgressScreen() {
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
-  // ── Measurements tab ─────────────────────────────────────────────────────
   const renderMeasurements = () => {
     const weights      = measurements.filter((m) => m.weight_kg).map((m) => m.weight_kg);
     const latestWeight = weights[0];
@@ -154,7 +154,6 @@ export default function ProgressScreen() {
 
     return (
       <>
-        {/* Client self-log button */}
         <TouchableOpacity style={styles.actionTopBtn} onPress={() => setMModal(true)}>
           <Ionicons name="add-circle-outline" size={18} color={colors.white} />
           <Text style={styles.actionTopBtnTxt}>Log Measurement</Text>
@@ -165,8 +164,7 @@ export default function ProgressScreen() {
             <Ionicons name="body-outline" size={48} color={colors.gray300} />
             <Text style={styles.emptyTitle}>No measurements yet</Text>
             <Text style={styles.emptyText}>
-              Tap "Log Measurement" above to record your first check-in, or your
-              trainer will add them during your sessions.
+              Tap "Log Measurement" above or your trainer will add them during sessions.
             </Text>
           </View>
         ) : (
@@ -186,21 +184,15 @@ export default function ProgressScreen() {
                         size={14}
                         color={weightDiff <= 0 ? colors.green700 : colors.red700}
                       />
-                      <Text style={[
-                        styles.diffTxt,
-                        { color: weightDiff <= 0 ? colors.green700 : colors.red700 },
-                      ]}>
+                      <Text style={[styles.diffTxt, { color: weightDiff <= 0 ? colors.green700 : colors.red700 }]}>
                         {Math.abs(weightDiff).toFixed(1)} kg from last check-in
                       </Text>
                     </View>
                   )}
                 </View>
-                <Text style={styles.summaryMeta}>
-                  Last updated {fmtDate(measurements[0].date)}
-                </Text>
+                <Text style={styles.summaryMeta}>Last updated {fmtDate(measurements[0].date)}</Text>
               </Card>
             )}
-
             {measurements.map((m) => (
               <Card key={m.id} style={styles.measureCard}>
                 <Text style={styles.measureDate}>{fmtDate(m.date)}</Text>
@@ -213,14 +205,12 @@ export default function ProgressScreen() {
                     { label: 'R. Arm',  value: m.right_arm_cm, unit: 'cm' },
                     { label: 'Thigh',   value: m.thigh_cm,     unit: 'cm' },
                     { label: 'Hips',    value: m.hips_cm,      unit: 'cm' },
-                  ]
-                    .filter((row) => row.value != null)
-                    .map((row) => (
-                      <View key={row.label} style={styles.metricItem}>
-                        <Text style={styles.metricLabel}>{row.label}</Text>
-                        <Text style={styles.metricValue}>{row.value} {row.unit}</Text>
-                      </View>
-                    ))}
+                  ].filter((row) => row.value != null).map((row) => (
+                    <View key={row.label} style={styles.metricItem}>
+                      <Text style={styles.metricLabel}>{row.label}</Text>
+                      <Text style={styles.metricValue}>{row.value} {row.unit}</Text>
+                    </View>
+                  ))}
                 </View>
                 {m.notes ? <Text style={styles.measureNotes}>{m.notes}</Text> : null}
               </Card>
@@ -231,24 +221,19 @@ export default function ProgressScreen() {
     );
   };
 
-  // ── Goals tab ────────────────────────────────────────────────────────────
   const renderGoals = () => {
     if (goals.length === 0) {
       return (
         <View style={styles.empty}>
           <Ionicons name="flag-outline" size={48} color={colors.gray300} />
           <Text style={styles.emptyTitle}>No goals set yet</Text>
-          <Text style={styles.emptyText}>
-            Speak with your trainer to set your goals.
-          </Text>
+          <Text style={styles.emptyText}>Speak with your trainer to set your goals.</Text>
         </View>
       );
     }
 
     const statusOrder: Record<string, number> = { in_progress: 0, achieved: 1, abandoned: 2 };
-    const sorted = [...goals].sort(
-      (a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9)
-    );
+    const sorted = [...goals].sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
 
     return sorted.map((g) => {
       const progress =
@@ -265,11 +250,7 @@ export default function ProgressScreen() {
             </View>
             <Badge
               label={g.status.replace('_', ' ')}
-              variant={
-                g.status === 'achieved'    ? 'active'
-                : g.status === 'abandoned' ? 'danger'
-                : 'pending'
-              }
+              variant={g.status === 'achieved' ? 'active' : g.status === 'abandoned' ? 'danger' : 'pending'}
             />
           </View>
           <View style={styles.goalMetaRow}>
@@ -300,20 +281,16 @@ export default function ProgressScreen() {
     });
   };
 
-  // ── Photos tab ───────────────────────────────────────────────────────────
   const renderPhotos = () => (
     <>
-      {/* Client self-upload button */}
       <TouchableOpacity
         style={[styles.actionTopBtn, uploadingPhoto && { opacity: 0.6 }]}
         onPress={pickAndUploadPhoto}
         disabled={uploadingPhoto}
       >
-        {uploadingPhoto ? (
-          <ActivityIndicator color={colors.white} size="small" />
-        ) : (
-          <Ionicons name="camera-outline" size={18} color={colors.white} />
-        )}
+        {uploadingPhoto
+          ? <ActivityIndicator color={colors.white} size="small" />
+          : <Ionicons name="camera-outline" size={18} color={colors.white} />}
         <Text style={styles.actionTopBtnTxt}>
           {uploadingPhoto ? 'Uploading...' : 'Upload Photo'}
         </Text>
@@ -324,23 +301,16 @@ export default function ProgressScreen() {
           <Ionicons name="images-outline" size={48} color={colors.gray300} />
           <Text style={styles.emptyTitle}>No progress photos yet</Text>
           <Text style={styles.emptyText}>
-            Tap "Upload Photo" above to add your first progress photo, or your
-            trainer will add them at key milestones.
+            Tap "Upload Photo" above or your trainer will add them at key milestones.
           </Text>
         </View>
       ) : (
         <View style={styles.photoGrid}>
           {photos.map((p) => (
             <View key={p.id} style={styles.photoCell}>
-              <Image
-                source={{ uri: p.file_url }}
-                style={styles.photoImg}
-                resizeMode="cover"
-              />
+              <Image source={{ uri: p.file_url }} style={styles.photoImg} resizeMode="cover" />
               <Text style={styles.photoDate}>{fmtDate(p.date)}</Text>
-              {p.notes ? (
-                <Text style={styles.photoNotes} numberOfLines={2}>{p.notes}</Text>
-              ) : null}
+              {p.notes ? <Text style={styles.photoNotes} numberOfLines={2}>{p.notes}</Text> : null}
             </View>
           ))}
         </View>
@@ -348,7 +318,6 @@ export default function ProgressScreen() {
     </>
   );
 
-  // ── Main render ──────────────────────────────────────────────────────────
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -369,7 +338,6 @@ export default function ProgressScreen() {
         <Text style={styles.title}>Progress</Text>
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabRow}>
         {tabs.map((t) => (
           <TouchableOpacity
@@ -393,7 +361,6 @@ export default function ProgressScreen() {
         {activeTab === 'photos'       && renderPhotos()}
       </ScrollView>
 
-      {/* ── Log Measurement Modal ── */}
       <Modal visible={mModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
@@ -465,168 +432,63 @@ export default function ProgressScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray50 },
-  header: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
-  },
-  title: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
-
+  header:    { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.sm },
+  title:     { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
   tabRow: {
-    flexDirection: 'row',
-    marginHorizontal: spacing.xl,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.sm,
-    borderWidth: 1,
-    borderColor: colors.gray200,
-    padding: 3,
-    marginBottom: spacing.md,
+    flexDirection: 'row', marginHorizontal: spacing.xl,
+    backgroundColor: colors.white, borderRadius: borderRadius.sm,
+    borderWidth: 1, borderColor: colors.gray200, padding: 3, marginBottom: spacing.md,
   },
-  tab: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.sm - 2,
-    alignItems: 'center',
-  },
-  tabActive:    { backgroundColor: colors.black },
-  tabTxt:       { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
+  tab:        { flex: 1, paddingVertical: spacing.sm, borderRadius: borderRadius.sm - 2, alignItems: 'center' },
+  tabActive:  { backgroundColor: colors.black },
+  tabTxt:     { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
   tabTxtActive: { color: colors.white },
-
-  scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
-
-  // Client action button (top of each tab)
+  scroll:     { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   actionTopBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.black,
-    borderRadius: borderRadius.sm,
-    paddingVertical: spacing.md,
-    marginBottom: spacing.lg,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    paddingVertical: spacing.md, marginBottom: spacing.lg,
   },
-  actionTopBtnTxt: {
-    color: colors.white,
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-  },
-
-  empty: {
-    alignItems: 'center',
-    paddingTop: spacing.xxxl,
-    gap: spacing.sm,
-  },
+  actionTopBtnTxt: { color: colors.white, fontSize: fontSize.sm, fontWeight: '600' },
+  empty:      { alignItems: 'center', paddingTop: spacing.xxxl, gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray700 },
-  emptyText: {
-    fontSize: fontSize.sm,
-    color: colors.gray400,
-    textAlign: 'center',
-    paddingHorizontal: spacing.xl,
-    lineHeight: 20,
-  },
-
-  // Measurements
+  emptyText:  { fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center', paddingHorizontal: spacing.xl, lineHeight: 20 },
   summaryCard:  { marginBottom: spacing.md, backgroundColor: colors.black },
-  summaryLabel: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.6)',
-    letterSpacing: 0.8,
-    marginBottom: spacing.xs,
-  },
+  summaryLabel: { fontSize: fontSize.xs, fontWeight: '600', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.8, marginBottom: spacing.xs },
   summaryRow:   { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.md },
   summaryValue: { fontSize: fontSize.xxxl, fontWeight: '700', color: colors.white },
   summaryMeta:  { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: spacing.xs },
-  diffBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-  },
-  diffTxt: { fontSize: fontSize.xs, fontWeight: '600' },
-
+  diffBadge:    { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: borderRadius.full },
+  diffTxt:      { fontSize: fontSize.xs, fontWeight: '600' },
   measureCard:  { marginBottom: spacing.sm },
   measureDate:  { fontSize: fontSize.sm, fontWeight: '700', color: colors.black, marginBottom: spacing.md },
   metricsGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   metricItem:   { minWidth: '28%' },
   metricLabel:  { fontSize: fontSize.xs, color: colors.gray400 },
   metricValue:  { fontSize: fontSize.md, fontWeight: '600', color: colors.black, marginTop: 2 },
-  measureNotes: {
-    fontSize: fontSize.xs,
-    color: colors.gray400,
-    marginTop: spacing.md,
-    fontStyle: 'italic',
-  },
-
-  // Goals
-  goalCard:      { marginBottom: spacing.sm },
-  goalHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
-  goalDesc:      { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
-  goalType:      { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2, textTransform: 'capitalize' },
-  goalMetaRow:   { flexDirection: 'row', gap: spacing.xl, marginBottom: spacing.md },
-  goalMetaItem:  {},
-  goalMetaLabel: { fontSize: fontSize.xs, color: colors.gray400 },
-  goalMetaValue: { fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
-  progressBar:   { height: 6, backgroundColor: colors.gray100, borderRadius: 3, overflow: 'hidden' },
-  progressFill:  { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
-
-  // Photos
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  photoCell: { width: '48%' },
-  photoImg: {
-    width: '100%',
-    aspectRatio: 0.75,
-    borderRadius: borderRadius.sm,
-    backgroundColor: colors.gray200,
-  },
-  photoDate:  { fontSize: fontSize.xs, color: colors.gray500, marginTop: spacing.xs, fontWeight: '500' },
-  photoNotes: { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
-
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: spacing.xl,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray100,
-  },
-  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
-  modalBody:  { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
-  fieldLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.gray700,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  input: {
-    borderWidth: 1.5,
-    borderColor: colors.gray200,
-    borderRadius: borderRadius.sm,
-    padding: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.black,
-  },
-  saveBtn: {
-    backgroundColor: colors.black,
-    borderRadius: borderRadius.sm,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    marginTop: spacing.xl,
-  },
-  saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
+  measureNotes: { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.md, fontStyle: 'italic' },
+  goalCard:     { marginBottom: spacing.sm },
+  goalHeader:   { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.md },
+  goalDesc:     { fontSize: fontSize.md, fontWeight: '600', color: colors.black },
+  goalType:     { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2, textTransform: 'capitalize' },
+  goalMetaRow:  { flexDirection: 'row', gap: spacing.xl, marginBottom: spacing.md },
+  goalMetaItem: {},
+  goalMetaLabel:{ fontSize: fontSize.xs, color: colors.gray400 },
+  goalMetaValue:{ fontSize: fontSize.sm, fontWeight: '600', color: colors.black, marginTop: 2 },
+  progressBar:  { height: 6, backgroundColor: colors.gray100, borderRadius: 3, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: colors.black, borderRadius: 3 },
+  photoGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  photoCell:    { width: '48%' },
+  photoImg:     { width: '100%', aspectRatio: 0.75, borderRadius: borderRadius.sm, backgroundColor: colors.gray200 },
+  photoDate:    { fontSize: fontSize.xs, color: colors.gray500, marginTop: spacing.xs, fontWeight: '500' },
+  photoNotes:   { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalSheet:   { backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl, maxHeight: '90%' },
+  modalHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100 },
+  modalTitle:   { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
+  modalBody:    { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
+  fieldLabel:   { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginTop: spacing.lg, marginBottom: spacing.sm },
+  input:        { borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
+  saveBtn:      { backgroundColor: colors.black, borderRadius: borderRadius.sm, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.xl },
+  saveBtnTxt:   { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
 });
