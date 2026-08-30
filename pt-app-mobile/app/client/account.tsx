@@ -15,8 +15,8 @@ export default function AccountScreen() {
   const { user, profile, logout } = useAuthStore();
 
   // ── Session pack state ──
-  const [activePack, setActivePack]       = useState<any>(null);
-  const [loadingPack, setLoadingPack]     = useState(true);
+  const [activePack, setActivePack]   = useState<any>(null);
+  const [loadingPack, setLoadingPack] = useState(true);
 
   // ── Logout state ──
   const [confirmingLogout, setConfirmingLogout] = useState(false);
@@ -42,12 +42,10 @@ export default function AccountScreen() {
     loadSessionPack();
   }, []);
 
-  // ── Fetch the most recent active session pack ─────────────────────────────
   const loadSessionPack = async () => {
     try {
       const res = await API.get('/payments/session-packs');
       const packs: any[] = res.data;
-      // Prefer active packs first, then any pack, sorted by created_at desc (API already does this)
       const active = packs.find((p) => p.status === 'active') ?? packs[0] ?? null;
       setActivePack(active);
     } catch (err) {
@@ -57,12 +55,11 @@ export default function AccountScreen() {
     }
   };
 
-  // ── Stripe placeholder handler ────────────────────────────────────────────
-  // TODO: Replace the URL below with your actual Stripe payment / checkout link
+  // ── Stripe placeholder handler ──
+  // TODO: Replace URL below with your actual Stripe payment / checkout link
   const handleStripePayment = () => {
     // const stripeUrl = 'https://buy.stripe.com/YOUR_LINK_HERE';
     // Linking.openURL(stripeUrl);
-    // Link is not yet configured — button is intentionally inactive for now.
   };
 
   const handleLogout = async () => {
@@ -77,17 +74,13 @@ export default function AccountScreen() {
     }
   };
 
-  // ── Save display name ─────────────────────────────────────────────────────
   const handleSaveName = async () => {
     if (!editName.trim()) return;
     setSavingName(true);
     try {
       await supabase.auth.updateUser({ data: { full_name: editName.trim() } });
       setNameSuccess(true);
-      setTimeout(() => {
-        setNameSuccess(false);
-        setEditModal(false);
-      }, 1500);
+      setTimeout(() => { setNameSuccess(false); setEditModal(false); }, 1500);
     } catch (err) {
       console.error('Profile update error:', err);
     } finally {
@@ -95,28 +88,17 @@ export default function AccountScreen() {
     }
   };
 
-  // ── Change password ───────────────────────────────────────────────────────
   const handleChangePassword = async () => {
     setPwError('');
-    if (pw1.length < 8) {
-      setPwError('Password must be at least 8 characters');
-      return;
-    }
-    if (pw1 !== pw2) {
-      setPwError('Passwords do not match');
-      return;
-    }
+    if (pw1.length < 8) { setPwError('Password must be at least 8 characters'); return; }
+    if (pw1 !== pw2)    { setPwError('Passwords do not match'); return; }
     setSavingPw(true);
     try {
       const { error } = await supabase.auth.updateUser({ password: pw1 });
       if (error) { setPwError(error.message); return; }
       setPwSuccess(true);
-      setPw1('');
-      setPw2('');
-      setTimeout(() => {
-        setPwSuccess(false);
-        setPwModal(false);
-      }, 2000);
+      setPw1(''); setPw2('');
+      setTimeout(() => { setPwSuccess(false); setPwModal(false); }, 2000);
     } catch (err: any) {
       setPwError(err.message ?? 'Something went wrong');
     } finally {
@@ -130,13 +112,14 @@ export default function AccountScreen() {
     ? new Date(profile.created_at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
     : null;
 
-  // Sessions remaining helpers
   const sessionsRemaining = activePack?.sessions_remaining ?? null;
   const totalSessions     = activePack?.total_sessions ?? null;
   const packName          = activePack?.pack_name ?? null;
   const packStatus        = activePack?.status ?? null;
   const packExpiry        = activePack?.expires_at
-    ? new Date(activePack.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    ? new Date(activePack.expires_at).toLocaleDateString('en-GB', {
+        day: 'numeric', month: 'short', year: 'numeric',
+      })
     : null;
 
   const sessionBarWidth =
@@ -145,29 +128,20 @@ export default function AccountScreen() {
       : '0%';
 
   const sessionBarColor =
-    sessionsRemaining === 0
-      ? colors.red500
-      : sessionsRemaining <= 2
-      ? '#F59E0B'   // amber warning
-      : colors.black;
+    sessionsRemaining === 0    ? colors.red500
+    : sessionsRemaining <= 2   ? '#F59E0B'
+    : colors.black;
 
   const menuItems = [
     {
       icon: 'person-outline' as const,
       label: 'Edit Profile',
-      onPress: () => {
-        setEditName(profile?.name ?? profile?.full_name ?? '');
-        setEditModal(true);
-      },
+      onPress: () => { setEditName(profile?.name ?? profile?.full_name ?? ''); setEditModal(true); },
     },
     {
       icon: 'lock-closed-outline' as const,
       label: 'Change Password',
-      onPress: () => {
-        setPw1(''); setPw2('');
-        setPwError(''); setPwSuccess(false);
-        setPwModal(true);
-      },
+      onPress: () => { setPw1(''); setPw2(''); setPwError(''); setPwSuccess(false); setPwModal(true); },
     },
     { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => {} },
     { icon: 'help-circle-outline'   as const, label: 'Help & Support', onPress: () => {} },
@@ -188,9 +162,7 @@ export default function AccountScreen() {
           </View>
           <Text style={styles.name}>{displayName}</Text>
           <Text style={styles.email}>{displayEmail}</Text>
-          {memberSince && (
-            <Text style={styles.since}>Member since {memberSince}</Text>
-          )}
+          {memberSince && <Text style={styles.since}>Member since {memberSince}</Text>}
         </Card>
 
         {/* ── Session Plan card ── */}
@@ -207,9 +179,7 @@ export default function AccountScreen() {
               <View style={styles.sessionTopRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.packName}>{packName}</Text>
-                  {packExpiry && (
-                    <Text style={styles.packExpiry}>Expires {packExpiry}</Text>
-                  )}
+                  {packExpiry && <Text style={styles.packExpiry}>Expires {packExpiry}</Text>}
                 </View>
                 <View style={[
                   styles.statusChip,
@@ -219,7 +189,7 @@ export default function AccountScreen() {
                 ]}>
                   <Text style={[
                     styles.statusChipTxt,
-                    packStatus === 'active' ? styles.statusActiveTxt
+                    packStatus === 'active'    ? styles.statusActiveTxt
                     : packStatus === 'exhausted' ? styles.statusDangerTxt
                     : styles.statusInactiveTxt,
                   ]}>
@@ -233,19 +203,15 @@ export default function AccountScreen() {
                 <Text style={[styles.sessionCount, { color: sessionBarColor }]}>
                   {sessionsRemaining}
                 </Text>
-                <Text style={styles.sessionCountOf}>
-                  /{totalSessions} sessions remaining
-                </Text>
+                <Text style={styles.sessionCountOf}>/{totalSessions} sessions remaining</Text>
               </View>
 
               {/* Progress bar */}
               <View style={styles.sessionBar}>
-                <View
-                  style={[
-                    styles.sessionBarFill,
-                    { width: sessionBarWidth as any, backgroundColor: sessionBarColor },
-                  ]}
-                />
+                <View style={[
+                  styles.sessionBarFill,
+                  { width: sessionBarWidth as any, backgroundColor: sessionBarColor },
+                ]} />
               </View>
 
               {sessionsRemaining === 0 && (
@@ -265,7 +231,6 @@ export default function AccountScreen() {
                 </View>
               )}
 
-              {/* Stripe payment button */}
               <TouchableOpacity
                 style={styles.stripeBtn}
                 onPress={handleStripePayment}
@@ -274,13 +239,8 @@ export default function AccountScreen() {
                 <Ionicons name="card-outline" size={18} color={colors.white} />
                 <Text style={styles.stripeBtnTxt}>Buy More Sessions</Text>
               </TouchableOpacity>
-              <Text style={styles.stripeHint}>
-                {/* This text will be removed once the real Stripe link is added */}
-                Online payment coming soon — contact your trainer to purchase sessions.
-              </Text>
             </>
           ) : (
-            /* No pack found at all */
             <>
               <View style={styles.noPackWrap}>
                 <Ionicons name="wallet-outline" size={36} color={colors.gray300} />
@@ -289,7 +249,6 @@ export default function AccountScreen() {
                   Contact your trainer to set up a session pack, or purchase one below.
                 </Text>
               </View>
-              {/* Stripe payment button — still shown even without a pack */}
               <TouchableOpacity
                 style={styles.stripeBtn}
                 onPress={handleStripePayment}
@@ -298,14 +257,11 @@ export default function AccountScreen() {
                 <Ionicons name="card-outline" size={18} color={colors.white} />
                 <Text style={styles.stripeBtnTxt}>Purchase Sessions</Text>
               </TouchableOpacity>
-              <Text style={styles.stripeHint}>
-                Online payment coming soon — contact your trainer to purchase sessions.
-              </Text>
             </>
           )}
         </Card>
 
-        {/* ── Account menu ── */}
+        {/* ── Settings menu ── */}
         <View style={styles.sectionLabel}>
           <Text style={styles.sectionLabelTxt}>SETTINGS</Text>
         </View>
@@ -325,10 +281,7 @@ export default function AccountScreen() {
 
         {/* ── Logout ── */}
         {!confirmingLogout ? (
-          <TouchableOpacity
-            style={styles.logoutBtn}
-            onPress={() => setConfirmingLogout(true)}
-          >
+          <TouchableOpacity style={styles.logoutBtn} onPress={() => setConfirmingLogout(true)}>
             <Ionicons name="log-out-outline" size={20} color={colors.red500} />
             <Text style={styles.logoutTxt}>Log out</Text>
           </TouchableOpacity>
@@ -429,21 +382,12 @@ export default function AccountScreen() {
                       secureTextEntry={!showPw1}
                       autoFocus
                     />
-                    <TouchableOpacity
-                      style={styles.pwToggle}
-                      onPress={() => setShowPw1((v) => !v)}
-                    >
-                      <Ionicons
-                        name={showPw1 ? 'eye-off-outline' : 'eye-outline'}
-                        size={18}
-                        color={colors.gray400}
-                      />
+                    <TouchableOpacity style={styles.pwToggle} onPress={() => setShowPw1(v => !v)}>
+                      <Ionicons name={showPw1 ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.gray400} />
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={[styles.fieldLabel, { marginTop: spacing.lg }]}>
-                    Confirm Password
-                  </Text>
+                  <Text style={[styles.fieldLabel, { marginTop: spacing.lg }]}>Confirm Password</Text>
                   <View style={styles.pwInputRow}>
                     <TextInput
                       style={styles.pwInput}
@@ -453,22 +397,13 @@ export default function AccountScreen() {
                       placeholderTextColor={colors.gray400}
                       secureTextEntry={!showPw2}
                     />
-                    <TouchableOpacity
-                      style={styles.pwToggle}
-                      onPress={() => setShowPw2((v) => !v)}
-                    >
-                      <Ionicons
-                        name={showPw2 ? 'eye-off-outline' : 'eye-outline'}
-                        size={18}
-                        color={colors.gray400}
-                      />
+                    <TouchableOpacity style={styles.pwToggle} onPress={() => setShowPw2(v => !v)}>
+                      <Ionicons name={showPw2 ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.gray400} />
                     </TouchableOpacity>
                   </View>
 
                   {pw1.length > 0 && pw1.length < 8 && (
-                    <Text style={styles.hintTxt}>
-                      {8 - pw1.length} more character{8 - pw1.length !== 1 ? 's' : ''} needed
-                    </Text>
+                    <Text style={styles.hintTxt}>{8 - pw1.length} more character{8 - pw1.length !== 1 ? 's' : ''} needed</Text>
                   )}
                   {pw1.length >= 8 && pw2.length > 0 && pw1 !== pw2 && (
                     <Text style={styles.hintTxtError}>Passwords don't match</Text>
@@ -513,7 +448,6 @@ const styles = StyleSheet.create({
   header:    { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.md },
   title:     { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
 
-  // Profile card
   profileCard: { alignItems: 'center', marginHorizontal: spacing.xl, marginBottom: spacing.lg },
   avatarWrap: {
     width: 72, height: 72, borderRadius: 36, backgroundColor: colors.black,
@@ -524,43 +458,25 @@ const styles = StyleSheet.create({
   email:     { fontSize: fontSize.sm, color: colors.gray400, marginTop: 2 },
   since:     { fontSize: fontSize.xs, color: colors.gray400, marginTop: spacing.xs },
 
-  // Section label
   sectionLabel: {
     paddingHorizontal: spacing.xl,
     paddingBottom: spacing.sm,
     paddingTop: spacing.xs,
   },
   sectionLabelTxt: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: colors.gray400,
-    letterSpacing: 0.8,
+    fontSize: fontSize.xs, fontWeight: '700',
+    color: colors.gray400, letterSpacing: 0.8,
   },
 
   // Session plan card
-  sessionCard: {
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.lg,
-  },
+  sessionCard: { marginHorizontal: spacing.xl, marginBottom: spacing.lg },
   sessionTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: spacing.lg,
+    flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.lg,
   },
-  packName: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.black,
-  },
-  packExpiry: {
-    fontSize: fontSize.xs,
-    color: colors.gray400,
-    marginTop: 2,
-  },
+  packName:   { fontSize: fontSize.md, fontWeight: '700', color: colors.black },
+  packExpiry: { fontSize: fontSize.xs, color: colors.gray400, marginTop: 2 },
   statusChip: {
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs, borderRadius: borderRadius.full,
   },
   statusActive:      { backgroundColor: '#D1FAE5' },
   statusDanger:      { backgroundColor: colors.red50 },
@@ -571,235 +487,113 @@ const styles = StyleSheet.create({
   statusInactiveTxt: { color: colors.gray500 },
 
   sessionCountRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 4,
-    marginBottom: spacing.sm,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 4, marginBottom: spacing.sm,
   },
-  sessionCount: {
-    fontSize: 40,
-    fontWeight: '800',
-    lineHeight: 44,
-  },
-  sessionCountOf: {
-    fontSize: fontSize.sm,
-    color: colors.gray500,
-    marginBottom: 6,
-  },
+  sessionCount:   { fontSize: 40, fontWeight: '800', lineHeight: 44 },
+  sessionCountOf: { fontSize: fontSize.sm, color: colors.gray500, marginBottom: 6 },
   sessionBar: {
-    height: 8,
-    backgroundColor: colors.gray100,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: spacing.md,
+    height: 8, backgroundColor: colors.gray100,
+    borderRadius: 4, overflow: 'hidden', marginBottom: spacing.md,
   },
-  sessionBarFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
+  sessionBarFill: { height: '100%', borderRadius: 4 },
 
   exhaustedBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-    backgroundColor: colors.red50,
-    padding: spacing.md,
-    borderRadius: borderRadius.sm,
-    marginBottom: spacing.md,
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    backgroundColor: colors.red50, padding: spacing.md,
+    borderRadius: borderRadius.sm, marginBottom: spacing.md,
   },
-  exhaustedTxt: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    color: colors.red700,
-    lineHeight: 18,
-  },
+  exhaustedTxt: { flex: 1, fontSize: fontSize.xs, color: colors.red700, lineHeight: 18 },
   lowBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-    backgroundColor: '#FFFBEB',
-    padding: spacing.md,
-    borderRadius: borderRadius.sm,
-    marginBottom: spacing.md,
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    backgroundColor: '#FFFBEB', padding: spacing.md,
+    borderRadius: borderRadius.sm, marginBottom: spacing.md,
   },
-  lowTxt: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    color: '#92400E',
-    lineHeight: 18,
-  },
+  lowTxt: { flex: 1, fontSize: fontSize.xs, color: '#92400E', lineHeight: 18 },
 
-  // Stripe button
   stripeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.black,
-    borderRadius: borderRadius.sm,
-    paddingVertical: spacing.md + 2,
-    marginTop: spacing.sm,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, backgroundColor: colors.black,
+    borderRadius: borderRadius.sm, paddingVertical: spacing.md + 2, marginTop: spacing.sm,
   },
-  stripeBtnTxt: {
-    color: colors.white,
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  stripeHint: {
-    fontSize: fontSize.xs,
-    color: colors.gray400,
-    textAlign: 'center',
-    marginTop: spacing.sm,
-    lineHeight: 16,
-  },
+  stripeBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
 
-  // No pack
   noPackWrap: {
-    alignItems: 'center',
-    paddingVertical: spacing.lg,
-    gap: spacing.sm,
+    alignItems: 'center', paddingVertical: spacing.lg, gap: spacing.sm,
   },
-  noPackTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    color: colors.gray600,
-  },
+  noPackTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.gray600 },
   noPackText: {
-    fontSize: fontSize.sm,
-    color: colors.gray400,
-    textAlign: 'center',
-    lineHeight: 20,
+    fontSize: fontSize.sm, color: colors.gray400, textAlign: 'center', lineHeight: 20,
   },
 
   // Menu card
   menuCard: {
-    marginHorizontal: spacing.xl,
-    padding: 0,
-    overflow: 'hidden',
-    marginBottom: spacing.lg,
+    marginHorizontal: spacing.xl, padding: 0, overflow: 'hidden', marginBottom: spacing.lg,
   },
   menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.lg,
-    gap: spacing.md,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, gap: spacing.md,
   },
   menuTxt:  { flex: 1, fontSize: fontSize.md, color: colors.gray700 },
   divider:  { height: 1, backgroundColor: colors.gray100 },
 
   // Logout
   logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    backgroundColor: colors.red50,
-    borderRadius: borderRadius.sm,
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.lg,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingVertical: spacing.lg,
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm,
+    marginHorizontal: spacing.xl, marginBottom: spacing.lg,
   },
   logoutTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.red500 },
   confirmBox: {
-    backgroundColor: colors.red50,
-    borderRadius: borderRadius.sm,
-    padding: spacing.xl,
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.red500 + '40',
+    backgroundColor: colors.red50, borderRadius: borderRadius.sm,
+    padding: spacing.xl, marginHorizontal: spacing.xl, marginBottom: spacing.lg,
+    borderWidth: 1, borderColor: colors.red500 + '40',
   },
   confirmText: {
-    fontSize: fontSize.md,
-    fontWeight: '500',
-    color: colors.gray800,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
+    fontSize: fontSize.md, fontWeight: '500', color: colors.gray800,
+    textAlign: 'center', marginBottom: spacing.lg,
   },
-  confirmBtns:    { flexDirection: 'row', gap: spacing.md },
-  cancelBtn: {
-    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
-    borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center',
-  },
-  cancelBtnTxt: { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
-  confirmLogoutBtn: {
-    flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm,
-    backgroundColor: colors.red500, alignItems: 'center',
-  },
+  confirmBtns:         { flexDirection: 'row', gap: spacing.md },
+  cancelBtn:           { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, borderWidth: 1.5, borderColor: colors.gray300, alignItems: 'center' },
+  cancelBtnTxt:        { fontSize: fontSize.md, fontWeight: '500', color: colors.gray700 },
+  confirmLogoutBtn:    { flex: 1, paddingVertical: spacing.md, borderRadius: borderRadius.sm, backgroundColor: colors.red500, alignItems: 'center' },
   confirmLogoutBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
 
-  version: {
-    textAlign: 'center',
-    fontSize: fontSize.xs,
-    color: colors.gray300,
-    marginTop: spacing.lg,
-  },
+  version: { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300, marginTop: spacing.lg },
 
   // Modals
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
+    borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl,
     paddingBottom: spacing.xxxl,
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: spacing.xl,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray100,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: spacing.xl, borderBottomWidth: 1, borderBottomColor: colors.gray100,
   },
   modalTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.black },
   modalBody:   { padding: spacing.xl },
-  fieldLabel:  {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.gray700,
-    marginBottom: spacing.sm,
-  },
+  fieldLabel:  { fontSize: fontSize.sm, fontWeight: '600', color: colors.gray700, marginBottom: spacing.sm },
   input: {
-    borderWidth: 1.5,
-    borderColor: colors.gray200,
-    borderRadius: borderRadius.sm,
-    padding: spacing.md,
-    fontSize: fontSize.md,
-    color: colors.black,
-    marginBottom: spacing.lg,
+    borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
+    padding: spacing.md, fontSize: fontSize.md, color: colors.black, marginBottom: spacing.lg,
   },
   successBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.green50,
-    padding: spacing.md,
-    borderRadius: borderRadius.sm,
-    marginBottom: spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.green50, padding: spacing.md,
+    borderRadius: borderRadius.sm, marginBottom: spacing.md,
   },
   successTxt: { fontSize: fontSize.sm, color: colors.green700, fontWeight: '500' },
   saveBtn: {
-    backgroundColor: colors.black,
-    borderRadius: borderRadius.sm,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
+    backgroundColor: colors.black, borderRadius: borderRadius.sm,
+    paddingVertical: spacing.lg, alignItems: 'center',
   },
   saveBtnTxt: { color: colors.white, fontSize: fontSize.md, fontWeight: '600' },
-
-  // Password modal
   pwInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: colors.gray200,
-    borderRadius: borderRadius.sm,
-    paddingRight: spacing.md,
-    marginBottom: spacing.xs,
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderColor: colors.gray200, borderRadius: borderRadius.sm,
+    paddingRight: spacing.md, marginBottom: spacing.xs,
   },
   pwInput:  { flex: 1, padding: spacing.md, fontSize: fontSize.md, color: colors.black },
   pwToggle: { padding: spacing.xs },
@@ -807,20 +601,12 @@ const styles = StyleSheet.create({
   hintTxtError:  { fontSize: fontSize.xs, color: colors.red500, marginBottom: spacing.xs },
   hintTxtOk:     { fontSize: fontSize.xs, color: colors.green700, marginBottom: spacing.xs },
   pwErrorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.red50,
-    padding: spacing.md,
-    borderRadius: borderRadius.sm,
-    marginTop: spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.red50, padding: spacing.md,
+    borderRadius: borderRadius.sm, marginTop: spacing.md,
   },
-  pwErrorTxt: { fontSize: fontSize.sm, color: colors.red700, flex: 1 },
-  pwSuccessBox: {
-    alignItems: 'center',
-    paddingVertical: spacing.xxl,
-    gap: spacing.sm,
-  },
+  pwErrorTxt:     { fontSize: fontSize.sm, color: colors.red700, flex: 1 },
+  pwSuccessBox:   { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
   pwSuccessTitle: { fontSize: fontSize.xl, fontWeight: '700', color: colors.black },
   pwSuccessSub:   { fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center' },
 });
