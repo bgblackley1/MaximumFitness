@@ -15,22 +15,20 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 type Tab = 'measurements' | 'goals' | 'photos';
 
 export default function ProgressScreen() {
-  const { clientProfileId } = useAuthStore();
+  const { clientProfileId, token } = useAuthStore();
   const [activeTab, setActiveTab]       = useState<Tab>('measurements');
   const [measurements, setMeasurements] = useState<any[]>([]);
   const [goals, setGoals]               = useState<any[]>([]);
   const [photos, setPhotos]             = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
-
-  const [mModal,  setMModal]  = useState(false);
-  const [mSaving, setMSaving] = useState(false);
+  const [mModal,  setMModal]            = useState(false);
+  const [mSaving, setMSaving]           = useState(false);
   const [mForm, setMForm] = useState({
     date: new Date().toISOString().split('T')[0],
     weight_kg: '', chest_cm: '', waist_cm: '',
     left_arm_cm: '', right_arm_cm: '', thigh_cm: '', hips_cm: '', notes: '',
   });
-
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
@@ -69,13 +67,12 @@ export default function ProgressScreen() {
     setMSaving(true);
     try {
       const payload: any = { date: mForm.date };
-      const numKeys = ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm'];
-      numKeys.forEach(k => {
-        const v = (mForm as any)[k];
-        if (v !== '') payload[k] = parseFloat(v);
-      });
+      ['weight_kg','chest_cm','waist_cm','left_arm_cm','right_arm_cm','thigh_cm','hips_cm']
+        .forEach(k => {
+          const v = (mForm as any)[k];
+          if (v !== '') payload[k] = parseFloat(v);
+        });
       if (mForm.notes) payload.notes = mForm.notes;
-
       const res = await API.post(`/clients/${clientProfileId}/measurements`, payload);
       setMeasurements(prev => [res.data, ...prev]);
       setMModal(false);
@@ -91,7 +88,19 @@ export default function ProgressScreen() {
     }
   };
 
-  // ── FIX: Don't set Content-Type manually — let axios auto-set multipart boundary ──
+  // ════════════════════════════════════════════════════════════════════
+  // PHOTO UPLOAD
+  //
+  // WHY fetch() instead of axios:
+  //   axios has 'Content-Type: application/json' set at the instance level
+  //   in api.ts.  On React Native Web, per-request header overrides do NOT
+  //   reliably remove that instance default, so axios sends the wrong
+  //   Content-Type and FastAPI returns 422 Unprocessable Entity.
+  //
+  //   Native fetch() lets the browser/runtime set Content-Type automatically
+  //   when the body is a FormData, which includes the required boundary string.
+  //   This works correctly on iOS, Android, and web.
+  // ════════════════════════════════════════════════════════════════════
   const pickAndUploadPhoto = async () => {
     if (!clientProfileId) return;
 
@@ -111,32 +120,51 @@ export default function ProgressScreen() {
 
     setUploadingPhoto(true);
     try {
-      const asset = result.assets[0];
+      const asset    = result.assets[0];
+      const mimeType = asset.mimeType || 'image/jpeg';
+      const ext      = mimeType.toLowerCase().includes('png') ? 'png' : 'jpg';
+
       const formData = new FormData();
       formData.append('file', {
         uri:  asset.uri,
-        type: asset.mimeType || 'image/jpeg',
-        name: 'progress_photo.jpg',
+        type: mimeType,
+        name: `progress_photo.${ext}`,
       } as any);
 
-      // ✅ KEY FIX: Set Content-Type to undefined so axios detects FormData
-      // and automatically adds the correct multipart/form-data boundary.
-      // Manually setting 'multipart/form-data' WITHOUT a boundary causes 422.
-      const res = await API.post(
-        `/clients/${clientProfileId}/photos`,
-        formData,
-        {
-          headers: {
-            'Content-Type': undefined,
-          },
+      // ── Use native fetch() — correctly handles FormData boundary on all platforms ──
+      const currentToken = token ?? useAuthStore.getState().token;
+      const baseURL      = API.defaults.baseURL ?? 'http://127.0.0.1:8000';
+      const url          = `${baseURL}/clients/${clientProfileId}/photos`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          // Authorization is the ONLY header we set.
+          // Do NOT set Content-Type — fetch sets it automatically with the
+          // correct multipart/form-data boundary when body is FormData.
+          Authorization: `Bearer ${currentToken}`,
         },
-      );
-      setPhotos(prev => [res.data, ...prev]);
+        body: formData,
+      });
+
+      if (!response.ok) {
+        // Try to extract the FastAPI detail message
+        let detail = `Upload failed (HTTP ${response.status})`;
+        try {
+          const errorJson = await response.json();
+          detail = errorJson.detail || detail;
+        } catch { /* response wasn't JSON */ }
+        throw new Error(detail);
+      }
+
+      const data = await response.json();
+      setPhotos(prev => [data, ...prev]);
       Alert.alert('Uploaded!', 'Your progress photo has been saved.');
     } catch (err: any) {
+      console.error('Photo upload error:', err.message ?? err);
       Alert.alert(
         'Upload Failed',
-        err.response?.data?.detail || 'Could not upload photo. Please try again.',
+        err.message || 'Could not upload photo. Please try again.',
       );
     } finally {
       setUploadingPhoto(false);
@@ -145,6 +173,8 @@ export default function ProgressScreen() {
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  // ── Render helpers ────────────────────────────────────────────────────────
 
   const renderMeasurements = () => {
     const weights      = measurements.filter((m) => m.weight_kg).map((m) => m.weight_kg);
@@ -190,7 +220,9 @@ export default function ProgressScreen() {
                     </View>
                   )}
                 </View>
-                <Text style={styles.summaryMeta}>Last updated {fmtDate(measurements[0].date)}</Text>
+                <Text style={styles.summaryMeta}>
+                  Last updated {fmtDate(measurements[0].date)}
+                </Text>
               </Card>
             )}
             {measurements.map((m) => (
@@ -231,16 +263,15 @@ export default function ProgressScreen() {
         </View>
       );
     }
-
     const statusOrder: Record<string, number> = { in_progress: 0, achieved: 1, abandoned: 2 };
-    const sorted = [...goals].sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
-
+    const sorted = [...goals].sort(
+      (a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9)
+    );
     return sorted.map((g) => {
       const progress =
         g.current_value != null && g.target_value
           ? Math.min((g.current_value / g.target_value) * 100, 100)
           : null;
-
       return (
         <Card key={g.id} style={styles.goalCard}>
           <View style={styles.goalHeader}>
@@ -250,7 +281,11 @@ export default function ProgressScreen() {
             </View>
             <Badge
               label={g.status.replace('_', ' ')}
-              variant={g.status === 'achieved' ? 'active' : g.status === 'abandoned' ? 'danger' : 'pending'}
+              variant={
+                g.status === 'achieved'  ? 'active'
+                : g.status === 'abandoned' ? 'danger'
+                : 'pending'
+              }
             />
           </View>
           <View style={styles.goalMetaRow}>
@@ -308,9 +343,15 @@ export default function ProgressScreen() {
         <View style={styles.photoGrid}>
           {photos.map((p) => (
             <View key={p.id} style={styles.photoCell}>
-              <Image source={{ uri: p.file_url }} style={styles.photoImg} resizeMode="cover" />
+              <Image
+                source={{ uri: p.file_url }}
+                style={styles.photoImg}
+                resizeMode="cover"
+              />
               <Text style={styles.photoDate}>{fmtDate(p.date)}</Text>
-              {p.notes ? <Text style={styles.photoNotes} numberOfLines={2}>{p.notes}</Text> : null}
+              {p.notes ? (
+                <Text style={styles.photoNotes} numberOfLines={2}>{p.notes}</Text>
+              ) : null}
             </View>
           ))}
         </View>
@@ -361,6 +402,7 @@ export default function ProgressScreen() {
         {activeTab === 'photos'       && renderPhotos()}
       </ScrollView>
 
+      {/* Log Measurement Modal */}
       <Modal visible={mModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
@@ -439,11 +481,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white, borderRadius: borderRadius.sm,
     borderWidth: 1, borderColor: colors.gray200, padding: 3, marginBottom: spacing.md,
   },
-  tab:        { flex: 1, paddingVertical: spacing.sm, borderRadius: borderRadius.sm - 2, alignItems: 'center' },
-  tabActive:  { backgroundColor: colors.black },
-  tabTxt:     { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
+  tab:          { flex: 1, paddingVertical: spacing.sm, borderRadius: borderRadius.sm - 2, alignItems: 'center' },
+  tabActive:    { backgroundColor: colors.black },
+  tabTxt:       { fontSize: fontSize.xs + 1, fontWeight: '500', color: colors.gray500 },
   tabTxtActive: { color: colors.white },
-  scroll:     { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+  scroll:       { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   actionTopBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: spacing.sm, backgroundColor: colors.black, borderRadius: borderRadius.sm,
