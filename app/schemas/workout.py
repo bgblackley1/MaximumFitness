@@ -26,14 +26,27 @@ class PlanWeekCreate(BaseModel):
 
 class WorkoutPlanCreate(BaseModel):
     title: str
-    client_id: uuid.UUID | None = None
+    client_id: uuid.UUID | None = None   # legacy; ignored for assignment
     goal_focus: str | None = None
     start_date: dt.date | None = None
     visibility: str | None = "draft"
     weeks: list[PlanWeekCreate] = []
 
 
-# ── Response schemas ──
+class AssignPlanRequest(BaseModel):
+    client_ids: list[uuid.UUID]
+
+
+# ── Response schemas ────────────────────────────────────────────────────────
+
+class ExerciseBasic(BaseModel):
+    id: uuid.UUID
+    name: str
+    muscle_group: str | None = None
+    image_url: str | None = None
+    cues: str | None = None
+    model_config = {"from_attributes": True}
+
 
 class PlanExerciseResponse(BaseModel):
     id: uuid.UUID
@@ -44,20 +57,7 @@ class PlanExerciseResponse(BaseModel):
     rest_seconds: int
     notes: str | None = None
     progression_rule: dict | None = None
-
-    # Nested exercise info
     exercise: "ExerciseBasic | None" = None
-
-    model_config = {"from_attributes": True}
-
-
-class ExerciseBasic(BaseModel):
-    id: uuid.UUID
-    name: str
-    muscle_group: str | None = None
-    image_url: str | None = None
-    cues: str | None = None
-
     model_config = {"from_attributes": True}
 
 
@@ -66,7 +66,6 @@ class PlanDayResponse(BaseModel):
     day_label: str
     day_order: int
     exercises: list[PlanExerciseResponse] = []
-
     model_config = {"from_attributes": True}
 
 
@@ -74,7 +73,23 @@ class PlanWeekResponse(BaseModel):
     id: uuid.UUID
     week_number: int
     days: list[PlanDayResponse] = []
+    model_config = {"from_attributes": True}
 
+
+class AssignedClientBasic(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class WorkoutPlanSummary(BaseModel):
+    id: uuid.UUID
+    title: str
+    goal_focus: str | None = None
+    start_date: dt.date | None = None
+    status: str
+    visibility: str
+    created_at: dt.datetime
+    assigned_clients: list[AssignedClientBasic] = []
     model_config = {"from_attributes": True}
 
 
@@ -90,22 +105,8 @@ class WorkoutPlanResponse(BaseModel):
     created_at: dt.datetime
     updated_at: dt.datetime
     weeks: list[PlanWeekResponse] = []
-
+    assigned_clients: list[AssignedClientBasic] = []
     model_config = {"from_attributes": True}
 
 
-class WorkoutPlanSummary(BaseModel):
-    id: uuid.UUID
-    title: str
-    client_id: uuid.UUID | None = None
-    goal_focus: str | None = None
-    start_date: dt.date | None = None
-    status: str
-    created_at: dt.datetime
-
-    model_config = {"from_attributes": True}
-
-class AssignPlanRequest(BaseModel):
-    client_ids: list[uuid.UUID]
-# Fix forward reference
 PlanExerciseResponse.model_rebuild()
