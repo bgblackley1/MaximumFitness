@@ -32,31 +32,52 @@ const RESET_STATE = {
   profileError: null,
 };
 
+/**
+ * Wraps any promise with a timeout. Resolves (not rejects) after ms —
+ * so it never blocks the caller even if the inner promise hangs.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  const timer = new Promise<null>((resolve) =>
+    setTimeout(() => {
+      console.warn(`[authStore] withTimeout: timed out after ${ms}ms`);
+      resolve(null);
+    }, ms)
+  );
+  return Promise.race([promise.then((v) => v), timer]);
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   ...RESET_STATE,
   isInitialized: false,
 
   initialize: async () => {
     try {
-      const sessionPromise = supabase.auth.getSession();
-      const timeout = new Promise<any>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 8000)
+      // ── 1. Get Supabase session (8s timeout) ────────────────────────────────
+      const sessionResult = await withTimeout(
+        supabase.auth.getSession(),
+        8_000
       );
-      const { data: { session } } = await Promise.race([sessionPromise, timeout])
-        .catch(() => ({ data: { session: null } }));
+
+      const session = sessionResult?.data?.session ?? null;
 
       if (session) {
         set({ session, user: session.user, token: session.access_token });
-        await get().fetchProfile(session.user.id);
+
+        // ── 2. Fetch profile from FastAPI (12s timeout) ──────────────────────
+        // CRITICAL FIX: wrap in withTimeout so a hanging API call (firewall,
+        // network drop, etc.) never prevents isInitialized from being set.
+        await withTimeout(get().fetchProfile(session.user.id), 12_000);
       }
     } catch (error) {
-      console.error('Init error:', error);
+      console.error('[authStore] initialize error:', error);
     } finally {
+      // ── Always set isInitialized, no matter what ─────────────────────────
       set({ isInitialized: true });
     }
 
+    // ── 3. Listen for future auth state changes ──────────────────────────────
     supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event);
+      console.log('[authStore] auth state change:', event);
       if (event === 'SIGNED_OUT' || !session) {
         set({ ...RESET_STATE });
         return;
@@ -64,21 +85,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (session) {
         set({ session, user: session.user, token: session.access_token });
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          await get().fetchProfile(session.user.id);
+          await withTimeout(get().fetchProfile(session.user.id), 12_000);
         }
       }
     });
   },
 
   fetchProfile: async (_userId: string) => {
-    // ── FIXED: Read role from FastAPI /auth/me, NOT from Supabase profiles table.
-    // Supabase profiles table is NOT populated for admin-created client accounts,
-    // so reading from there always returns the wrong role (or null).
-    // Our FastAPI users table is the single source of truth for roles.
     set({ profileError: null });
     try {
       const res = await API.get('/auth/me');
-      const userData = res.data; // { id, email, name, role, ... }
+      const userData = res.data;
 
       set({
         profile: userData,
@@ -86,21 +103,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
 
       if (userData.role === 'client') {
-        await get().fetchClientProfileId();
+        await withTimeout(get().fetchClientProfileId(), 8_000);
       }
     } catch (e: any) {
       const status = e?.response?.status;
-      console.error('fetchProfile error:', status, e?.message);
+      console.error('[authStore] fetchProfile error:', status, e?.message);
 
       if (status === 404) {
-        // User authenticated in Supabase but not in FastAPI DB.
-        // This happens if client was created before the client_service fix.
         set({
           profileError: 'Account not found in database. Please contact your trainer.',
           role: null,
         });
       }
-      // Don't set role — _layout.tsx will handle null role by redirecting to login
+      // Network errors (no status) — silently fail.
+      // role stays null → _layout.tsx redirects to login.
     }
   },
 
@@ -109,33 +125,50 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const res = await API.get('/clients/me');
       set({ clientProfileId: res.data.id });
     } catch (err) {
-      console.error('fetchClientProfileId error:', err);
+      console.error('[authStore] fetchClientProfileId error:', err);
     }
   },
 
   login: async (email: string, password: string) => {
     set({ isLoading: true });
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
       if (error) {
         set({ isLoading: false });
         return { error: error.message };
       }
+
       if (data.session) {
         set({
           session: data.session,
           user: data.session.user,
           token: data.session.access_token,
         });
-        await get().fetchProfile(data.session.user.id);
 
-        // If profile fetch failed (404), return error so login screen shows it
-        const { profileError } = get();
+        // Timeout guard: if the API is unreachable, don't hang the login button
+        await withTimeout(get().fetchProfile(data.session.user.id), 12_000);
+
+        const { profileError, role } = get();
+
         if (profileError) {
           set({ isLoading: false });
           return { error: profileError };
         }
+
+        // If role is still null after the timeout, the API was unreachable
+        if (!role) {
+          set({ isLoading: false });
+          return {
+            error:
+              'Could not reach the server. Check your connection and try again.',
+          };
+        }
       }
+
       set({ isLoading: false });
       return {};
     } catch (error: any) {
@@ -149,18 +182,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await supabase.auth.signOut({ scope: 'local' });
     } catch (e) {
-      console.error('SignOut error (non-fatal):', e);
+      console.error('[authStore] signOut error (non-fatal):', e);
     }
     try {
       const keys = await AsyncStorage.getAllKeys();
       const supabaseKeys = keys.filter(
-        (k) => k.startsWith('sb-') || k.includes('supabase') || k.includes('auth-token')
+        (k) =>
+          k.startsWith('sb-') ||
+          k.includes('supabase') ||
+          k.includes('auth-token')
       );
       if (supabaseKeys.length > 0) {
         await AsyncStorage.multiRemove(supabaseKeys);
       }
     } catch (e) {
-      console.error('Storage clear error (non-fatal):', e);
+      console.error('[authStore] storage clear error (non-fatal):', e);
     }
   },
 }));
