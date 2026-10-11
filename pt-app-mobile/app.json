@@ -14,14 +14,20 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.maximumfitness.app"
+      "bundleIdentifier": "com.maximumfitness.app",
+      "infoPlist": {
+        "NSMotionUsageDescription": "Maximum Fitness reads your step count to display your daily activity progress on the home screen."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.maximumfitness.app"
+      "package": "com.maximumfitness.app",
+      "permissions": [
+        "android.permission.ACTIVITY_RECOGNITION"
+      ]
     },
     "plugins": [
       "expo-router",

@@ -10,19 +10,26 @@ import { useAuthStore } from '@/stores/authStore';
 import API from '@/services/api';
 import Card from '@/components/Card';
 import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
+import { useStepCount, DAILY_STEP_GOAL } from '@/hooks/useStepCount';
 
 export default function ClientHomeScreen() {
   const { profile } = useAuthStore();
-  const router = useRouter();
+  const router      = useRouter();
+
   const [nextBooking, setNextBooking] = useState<any>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing,  setRefreshing]  = useState(false);
+
+  // ── Step count ─────────────────────────────────────────────────────────────
+  // Permission is requested automatically on first mount.
+  // Card is hidden until isGranted === true and steps !== null.
+  const { steps, isGranted } = useStepCount();
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const res = await API.get(`/bookings?from_date=${today}`);
+      const res   = await API.get(`/bookings?from_date=${today}`);
       const upcoming = (res.data as any[])
         .filter((b) => b.status === 'booked' || b.status === 'confirmed')
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -52,17 +59,28 @@ export default function ClientHomeScreen() {
 
   const displayName = profile?.full_name ?? profile?.email?.split('@')[0] ?? 'there';
 
+  // ── Step count derived values ───────────────────────────────────────────────
+  const barPct = steps !== null
+    ? Math.min(Math.round((steps / DAILY_STEP_GOAL) * 100), 100)
+    : 0;
+
+  const stepColor =
+    steps === null              ? colors.gray300
+    : steps >= DAILY_STEP_GOAL  ? colors.green500
+    : steps >= 5_000            ? colors.black
+    :                             colors.gray400;
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Greeting */}
+        {/* ── Greeting ─────────────────────────────────────────────────────── */}
         <Text style={styles.greeting}>Hello, {displayName} 👋</Text>
         <Text style={styles.subtitle}>Keep making progress.</Text>
 
-        {/* Next session */}
+        {/* ── Next session ──────────────────────────────────────────────────── */}
         <Card style={styles.sessionCard}>
           <Text style={styles.sectionMeta}>NEXT SESSION</Text>
           {nextBooking ? (
@@ -96,7 +114,59 @@ export default function ClientHomeScreen() {
           )}
         </Card>
 
-        {/* Quick action tiles */}
+        {/* ── Today's Steps ─────────────────────────────────────────────────
+             Only rendered when the user has granted motion permission.
+             On first load the OS permission dialog fires automatically.   */}
+        {isGranted && steps !== null && (
+          <Card style={styles.stepsCard}>
+            <Text style={styles.sectionMeta}>TODAY'S STEPS</Text>
+
+            <View style={styles.stepsRow}>
+              {/* Left: big number + subtitle */}
+              <View style={styles.stepsLeft}>
+                <Text style={[styles.stepsNumber, { color: stepColor }]}>
+                  {steps.toLocaleString()}
+                </Text>
+                <Text style={styles.stepsSubtitle}>
+                  {steps >= DAILY_STEP_GOAL
+                    ? '🎉 Daily goal reached!'
+                    : `${(DAILY_STEP_GOAL - steps).toLocaleString()} steps to go`}
+                </Text>
+              </View>
+
+              {/* Right: icon + percentage */}
+              <View style={styles.stepsIconWrap}>
+                <Ionicons name="footsteps-outline" size={30} color={stepColor} />
+                <Text style={[styles.stepsPercent, { color: stepColor }]}>
+                  {barPct}%
+                </Text>
+              </View>
+            </View>
+
+            {/* Progress bar */}
+            <View style={styles.stepsBar}>
+              <View
+                style={[
+                  styles.stepsBarFill,
+                  {
+                    width: `${barPct}%` as any,
+                    backgroundColor: stepColor,
+                  },
+                ]}
+              />
+            </View>
+
+            {/* Bar legend */}
+            <View style={styles.stepsLegend}>
+              <Text style={styles.stepsLegendTxt}>0</Text>
+              <Text style={styles.stepsLegendTxt}>
+                {DAILY_STEP_GOAL.toLocaleString()} goal
+              </Text>
+            </View>
+          </Card>
+        )}
+
+        {/* ── Quick action tiles ────────────────────────────────────────────── */}
         <Text style={styles.sectionTitle}>Quick Actions</Text>
         <View style={styles.grid}>
           {tiles.map((t) => (
@@ -118,9 +188,15 @@ export default function ClientHomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray50 },
-  scroll: { padding: spacing.xl, paddingBottom: spacing.xxxl },
+  scroll:    { padding: spacing.xl, paddingBottom: spacing.xxxl },
+
   greeting: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.black },
-  subtitle: { fontSize: fontSize.sm, color: colors.gray400, marginTop: spacing.xs, marginBottom: spacing.xxl },
+  subtitle: {
+    fontSize: fontSize.sm, color: colors.gray400,
+    marginTop: spacing.xs, marginBottom: spacing.xxl,
+  },
+
+  // ── Session card ───────────────────────────────────────────────────────────
   sessionCard: { marginBottom: spacing.xxl },
   sectionMeta: {
     fontSize: fontSize.xs, fontWeight: '600', color: colors.gray400,
@@ -128,15 +204,41 @@ const styles = StyleSheet.create({
   },
   sessionDate: { fontSize: fontSize.lg, fontWeight: '600', color: colors.black },
   sessionTime: { fontSize: fontSize.md, color: colors.gray600, marginTop: spacing.xs },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs },
+  row:         { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs },
   locationTxt: { fontSize: fontSize.sm, color: colors.gray500 },
-  noSession: { fontSize: fontSize.md, color: colors.gray500, marginBottom: spacing.lg },
+  noSession:   { fontSize: fontSize.md, color: colors.gray500, marginBottom: spacing.lg },
   bookBtn: {
     backgroundColor: colors.black, borderRadius: borderRadius.sm,
     paddingVertical: spacing.md, alignItems: 'center',
   },
   bookBtnTxt: { color: colors.white, fontWeight: '600', fontSize: fontSize.md },
-  sectionTitle: { fontSize: fontSize.lg, fontWeight: '600', color: colors.black, marginBottom: spacing.md },
+
+  // ── Steps card ─────────────────────────────────────────────────────────────
+  stepsCard:    { marginBottom: spacing.xxl },
+  stepsRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'flex-start', marginTop: spacing.xs, marginBottom: spacing.lg,
+  },
+  stepsLeft:    { flex: 1 },
+  stepsNumber:  { fontSize: 40, fontWeight: '800', lineHeight: 44 },
+  stepsSubtitle:{ fontSize: fontSize.sm, color: colors.gray500, marginTop: spacing.xs },
+  stepsIconWrap:{ alignItems: 'center', gap: spacing.xs, paddingTop: spacing.xs },
+  stepsPercent: { fontSize: fontSize.sm, fontWeight: '700' },
+  stepsBar: {
+    height: 8, backgroundColor: colors.gray100,
+    borderRadius: 4, overflow: 'hidden', marginBottom: spacing.xs,
+  },
+  stepsBarFill: { height: '100%', borderRadius: 4 },
+  stepsLegend: {
+    flexDirection: 'row', justifyContent: 'space-between',
+  },
+  stepsLegendTxt: { fontSize: fontSize.xs, color: colors.gray400 },
+
+  // ── Quick action tiles ─────────────────────────────────────────────────────
+  sectionTitle: {
+    fontSize: fontSize.lg, fontWeight: '600',
+    color: colors.black, marginBottom: spacing.md,
+  },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   tile: {
     width: '47%', backgroundColor: colors.white, borderRadius: borderRadius.md,
