@@ -1,9 +1,15 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/constants/theme';
 
 export default function PTLayout() {
+  const insets = useSafeAreaInsets();
+
+  const tabBarHeight    = 60 + insets.bottom;
+  const tabBarPadBottom = Math.max(insets.bottom, 8);
+
   return (
     <Tabs
       screenOptions={{
@@ -15,8 +21,8 @@ export default function PTLayout() {
           borderTopColor: colors.gray200,
           borderTopWidth: 1,
           paddingTop: 8,
-          paddingBottom: 8,
-          height: 60,
+          paddingBottom: tabBarPadBottom,
+          height: tabBarHeight,
         },
         tabBarLabelStyle: { fontSize: 11, fontWeight: '500' },
       }}
@@ -75,11 +81,9 @@ export default function PTLayout() {
           ),
         }}
       />
-
-      {/* Hidden screens */}
-      <Tabs.Screen name="add-client"      options={{ href: null }} />
-      <Tabs.Screen name="client-detail"   options={{ href: null }} />
-      <Tabs.Screen name="workout-detail"  options={{ href: null }} />
+      <Tabs.Screen name="add-client"     options={{ href: null }} />
+      <Tabs.Screen name="client-detail"  options={{ href: null }} />
+      <Tabs.Screen name="workout-detail" options={{ href: null }} />
     </Tabs>
   );
 }

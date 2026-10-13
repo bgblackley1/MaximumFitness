@@ -2,27 +2,34 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import { useAuthStore } from '../stores/authStore';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ⚙️  SET THIS to your laptop's WiFi IP address (check with `ipconfig` on
-//    Windows or `ifconfig | grep "inet "` on Mac).
-//    Example: '192.168.1.42'
-//
-//    Leave as empty string '' to auto-select based on platform (emulator/web).
-// ─────────────────────────────────────────────────────────────────────────────
-const DEV_MACHINE_IP = '192.168.55.189';   // ← PUT YOUR LAPTOP IP HERE e.g. '192.168.1.42'
+/**
+ * URL strategy:
+ *
+ *  Android physical device via USB + `adb reverse tcp:8000 tcp:8000`
+ *    → http://127.0.0.1:8000   (USB tunnel maps phone localhost → PC port 8000)
+ *
+ *  Android emulator (no USB)
+ *    → http://10.0.2.2:8000    (emulator special alias for host machine)
+ *
+ *  iOS simulator / web
+ *    → http://127.0.0.1:8000
+ *
+ *  Real device on WiFi only (no USB)
+ *    → set WIFI_FALLBACK_IP to your laptop's LAN IP e.g. '192.168.55.189'
+ */
+
+// Only needed if testing over WiFi without USB — leave empty when using USB
+const WIFI_FALLBACK_IP = '';
 
 function getBaseUrl(): string {
   if (__DEV__) {
-    // Real device via Expo Go — use the manually set laptop LAN IP
-    if (DEV_MACHINE_IP) {
-      return `http://${DEV_MACHINE_IP}:8000`;
+    if (Platform.OS === 'android') {
+      // USB + adb reverse → use localhost directly
+      // If not using USB, fall back to LAN IP or emulator alias
+      if (WIFI_FALLBACK_IP) return `http://${WIFI_FALLBACK_IP}:8000`;
+      return 'http://127.0.0.1:8000'; // works when adb reverse is active
     }
-
-    // Android emulator: 10.0.2.2 routes to the host machine's localhost
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8000';
   }
-
-  // iOS simulator, web, or production
   return 'http://127.0.0.1:8000';
 }
 
