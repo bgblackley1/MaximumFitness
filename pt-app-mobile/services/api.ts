@@ -2,17 +2,21 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import { useAuthStore } from '../stores/authStore';
 
-// ── Production backend URL ─────────────────────────────────────────────────
-// Once your backend is deployed, paste the public URL here.
-// Leave DEV_MACHINE_IP for local development.
-const PRODUCTION_URL = 'maximumfitness-production.up.railway.app'; // ← SET THIS
+// ── Your deployed Railway URL ────────────────────────────────────────────────
+const PRODUCTION_URL = 'https://maximumfitness-production.up.railway.app'; // ← added https://
 
-// ── Dev machine IP for local testing (USB + adb reverse) ──────────────────
-const DEV_MACHINE_IP = '';  // Leave empty when using adb reverse
+// ── Set to true to force Railway even during local dev ───────────────────────
+const USE_PRODUCTION_IN_DEV = true;
 
-// Temporary test — force Railway even in dev
+// ── Dev machine IP (only needed for WiFi testing without USB) ────────────────
+const DEV_MACHINE_IP = '';
+
 function getBaseUrl(): string {
-  return PRODUCTION_URL;
+  if (!__DEV__) return PRODUCTION_URL;
+  if (USE_PRODUCTION_IN_DEV) return PRODUCTION_URL;
+  if (DEV_MACHINE_IP) return `http://${DEV_MACHINE_IP}:8000`;
+  if (Platform.OS === 'android') return 'http://127.0.0.1:8000';
+  return 'http://127.0.0.1:8000';
 }
 
 const API = axios.create({
