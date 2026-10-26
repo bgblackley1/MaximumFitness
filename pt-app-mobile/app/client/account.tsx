@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   Modal, TextInput, ScrollView, ActivityIndicator,
+  Linking,   // ← ADD THIS
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -113,6 +114,15 @@ export default function AccountScreen() {
     },
     { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => {} },
     { icon: 'help-circle-outline'   as const, label: 'Help & Support', onPress: () => {} },
+    // ── Legal ─────────────────────────────────────────────────────────────────
+    {
+      icon: 'shield-checkmark-outline' as const, label: 'Privacy Policy',
+      onPress: () => Linking.openURL('https://maximumfitnessglasgow.com/privacy.html'),
+    },
+    {
+      icon: 'trash-outline' as const, label: 'Delete My Data',
+      onPress: () => Linking.openURL('https://maximumfitnessglasgow.com/data-deletion.html'),
+    },
   ];
 
   return (

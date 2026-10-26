@@ -2,17 +2,17 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import { useAuthStore } from '../stores/authStore';
 
-// ── Your deployed Railway URL ────────────────────────────────────────────────
-const PRODUCTION_URL = 'https://maximumfitness-production.up.railway.app'; // ← added https://
+const PRODUCTION_URL = 'https://maximumfitness-production.up.railway.app';
 
-// ── Set to true to force Railway even during local dev ───────────────────────
-const USE_PRODUCTION_IN_DEV = true;
+// ── Toggle this when testing locally ─────────────────────────────────────────
+// false = dev builds hit local uvicorn (normal development)
+// true  = dev builds hit Railway (use only when testing prod data locally)
+const USE_PRODUCTION_IN_DEV = false;   // ← was true
 
-// ── Dev machine IP (only needed for WiFi testing without USB) ────────────────
 const DEV_MACHINE_IP = '';
 
 function getBaseUrl(): string {
-  if (!__DEV__) return PRODUCTION_URL;
+  if (!__DEV__) return PRODUCTION_URL;           // production build → always Railway
   if (USE_PRODUCTION_IN_DEV) return PRODUCTION_URL;
   if (DEV_MACHINE_IP) return `http://${DEV_MACHINE_IP}:8000`;
   if (Platform.OS === 'android') return 'http://127.0.0.1:8000';

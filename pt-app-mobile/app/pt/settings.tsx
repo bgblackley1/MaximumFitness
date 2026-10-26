@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, ActivityIndicator,
+  ScrollView, ActivityIndicator, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/authStore';
 import Card from '@/components/Card';
@@ -12,7 +11,6 @@ import { colors, fontSize, spacing, borderRadius } from '@/constants/theme';
 
 export default function SettingsScreen() {
   const { user, profile, logout } = useAuthStore();
-  const router = useRouter();
   const [confirmingLogout, setConfirmingLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -22,9 +20,6 @@ export default function SettingsScreen() {
     setLoggingOut(true);
     try {
       await logout();
-      // Don't call router.replace here — _layout.tsx watches `user` state
-      // and will automatically redirect to /login when user becomes null.
-      // Calling router.replace here AND in _layout causes a race condition.
     } catch (e) {
       console.error('Logout error:', e);
     } finally {
@@ -32,6 +27,19 @@ export default function SettingsScreen() {
       setConfirmingLogout(false);
     }
   };
+
+  const menuItems = [
+    {
+      icon: 'shield-checkmark-outline' as const,
+      label: 'Privacy Policy',
+      onPress: () => Linking.openURL('https://maximumfitnessglasgow.com/privacy.html'),
+    },
+    {
+      icon: 'trash-outline' as const,
+      label: 'Delete My Data',
+      onPress: () => Linking.openURL('https://maximumfitnessglasgow.com/data-deletion.html'),
+    },
+  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -59,7 +67,21 @@ export default function SettingsScreen() {
           </View>
         </Card>
 
-        {/* Logout — inline confirmation instead of Alert (Alert is unreliable on web) */}
+        {/* Legal links */}
+        <Card style={styles.menuCard}>
+          {menuItems.map((item, idx) => (
+            <React.Fragment key={item.label}>
+              <TouchableOpacity style={styles.menuItem} onPress={item.onPress}>
+                <Ionicons name={item.icon} size={20} color={colors.gray600} />
+                <Text style={styles.menuTxt}>{item.label}</Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.gray300} />
+              </TouchableOpacity>
+              {idx < menuItems.length - 1 && <View style={styles.divider} />}
+            </React.Fragment>
+          ))}
+        </Card>
+
+        {/* Logout */}
         {!confirmingLogout ? (
           <TouchableOpacity
             style={styles.logoutBtn}
@@ -92,11 +114,6 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        <Text style={styles.hint}>
-          💡 To test the client view: log out, then open a{'\n'}
-          private/incognito window at localhost:8081
-        </Text>
-
         <Text style={styles.version}>Maximum Fitness v1.0.0</Text>
       </ScrollView>
     </SafeAreaView>
@@ -121,12 +138,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
     borderRadius: borderRadius.full,
   },
-  roleText:   { color: colors.white, fontSize: fontSize.xs, fontWeight: '600' },
+  roleText: { color: colors.white, fontSize: fontSize.xs, fontWeight: '600' },
 
   infoCard:   { marginBottom: spacing.lg, padding: spacing.lg },
   infoRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   infoLabel:  { fontSize: fontSize.md, color: colors.gray700, flex: 1 },
   infoValue:  { fontSize: fontSize.sm, color: colors.gray400 },
+
+  menuCard:   { marginBottom: spacing.lg, padding: 0, overflow: 'hidden' },
+  menuItem:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, gap: spacing.md },
+  menuTxt:    { flex: 1, fontSize: fontSize.md, color: colors.gray700 },
+  divider:    { height: 1, backgroundColor: colors.gray100 },
 
   logoutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -157,11 +179,5 @@ const styles = StyleSheet.create({
   },
   confirmLogoutBtnTxt: { fontSize: fontSize.md, fontWeight: '600', color: colors.white },
 
-  hint: {
-    fontSize: fontSize.sm, color: colors.gray500, textAlign: 'center',
-    backgroundColor: colors.gray100, padding: spacing.md,
-    borderRadius: borderRadius.sm, marginBottom: spacing.lg,
-    lineHeight: 20,
-  },
   version: { textAlign: 'center', fontSize: fontSize.xs, color: colors.gray300 },
 });
