@@ -14,10 +14,12 @@
       "backgroundColor": "#000000"
     },
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.maximum_fitness_glasgow",
+      "supportsTablet": false,
+      "bundleIdentifier": "com.MaximumFitness",
       "infoPlist": {
-        "NSMotionUsageDescription": "Maximum Fitness reads your step count to display your daily activity progress on the home screen."
+        "NSMotionUsageDescription": "Maximum Fitness reads your step count to display your daily activity progress on the home screen.",
+        "NSHealthShareUsageDescription": "Maximum Fitness reads your step count from Apple Health to display your daily activity on the home screen.",
+        "NSHealthUpdateUsageDescription": "Maximum Fitness does not write any data to Apple Health."
       }
     },
     "android": {
@@ -25,7 +27,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.maximum_fitness_glasgow",
+      "package": "com.MaximumFitness",
       "permissions": [
         "android.permission.ACTIVITY_RECOGNITION"
       ]
