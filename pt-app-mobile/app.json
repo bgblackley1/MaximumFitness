@@ -19,7 +19,8 @@
       "infoPlist": {
         "NSMotionUsageDescription": "Maximum Fitness reads your step count to display your daily activity progress on the home screen.",
         "NSHealthShareUsageDescription": "Maximum Fitness reads your step count from Apple Health to display your daily activity on the home screen.",
-        "NSHealthUpdateUsageDescription": "Maximum Fitness does not write any data to Apple Health."
+        "NSHealthUpdateUsageDescription": "Maximum Fitness does not write any data to Apple Health.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
